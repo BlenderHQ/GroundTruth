@@ -15,11 +15,14 @@ from typing import Optional
 
 import bpy
 from bpy.types import Operator
+import traceback
 
 from .. import external_render
 from ..runtime import JOB
+from ..utils.agisoft_xml import write_metashape_xml_for_frames
 from ..utils.rc_xmp import (
     camera_stats_at_frame,
+    format_image_name,
     pattern_to_hash_path,
     write_xmp_for_camera_at_frame,
     xmp_path_for_image_path,
@@ -109,6 +112,74 @@ def _show_image_in_any_image_editor(context: bpy.types.Context, image_path: str)
                     return
 
 
+def _maybe_write_metashape_xml(context: bpy.types.Context, *, out_base: str) -> None:
+    if not JOB.active:
+        return
+    if str(JOB.output_format) != "METASHAPE":
+        return
+    if JOB.cancel_requested:
+        return
+
+    frames = list(range(int(JOB.frame_start), int(JOB.frame_end) + 1, int(JOB.frame_step)))
+    if not frames:
+        return
+
+    scene = context.scene
+    cam = bpy.data.objects.get(JOB.camera_name)
+    if cam is None or cam.type != "CAMERA":
+        JOB.last_error = "Camera missing while writing Metashape XML"
+        return
+
+    # Decide output directory based on the rendered images (preferred).
+    out_dir = ""
+    if JOB.last_image_path:
+        out_dir = os.path.dirname(str(JOB.last_image_path))
+    if not out_dir:
+        try:
+            out_dir = os.path.dirname(_frame_path_with_base(scene, out_base, int(frames[0])))
+        except Exception:
+            out_dir = str(JOB.out_dir or "")
+    if not out_dir:
+        out_dir = "."
+
+    name = str(JOB.metashape_xml_filename or "metashape.xml")
+    if name.lower().endswith(".xml") is False:
+        name = name + ".xml"
+    out_xml_path = name
+    if not (os.path.isabs(out_xml_path) or out_xml_path.startswith("//")):
+        out_xml_path = os.path.join(out_dir, out_xml_path)
+
+    def label_for_frame(frame: int) -> str:
+        # Prefer the actual render output name.
+        try:
+            img_path = _frame_path_with_base(scene, out_base, frame)
+            return os.path.basename(img_path)
+        except Exception:
+            return os.path.basename(format_image_name(str(JOB.image_pattern), int(frame)))
+
+    try:
+        print(f"[GroundTruth] metashape_xml: writing -> {out_xml_path}")
+        write_metashape_xml_for_frames(
+            scene=scene,
+            cam_obj=cam,
+            frames=frames,
+            image_label_for_frame=label_for_frame,
+            out_xml_path=out_xml_path,
+            rotation_mode=str(JOB.rotation_mode),
+            distortion_mode=str(JOB.distortion_model),
+            k1=float(JOB.distortion_k1),
+            k2=float(JOB.distortion_k2),
+            k3=float(JOB.distortion_k3),
+            k4=float(JOB.distortion_k4),
+            t1=float(JOB.distortion_t1),
+            t2=float(JOB.distortion_t2),
+        )
+        print("[GroundTruth] metashape_xml: ok")
+    except Exception as e:
+        JOB.last_error = f"Metashape XML error: {e}"
+        print(f"[GroundTruth] metashape_xml: ERROR {e!r}")
+
+
 def _start_job(context: bpy.types.Context, *, mode: str, frame_start: int, frame_end: int, frame_step: int) -> None:
     scene = context.scene
     props = scene.groundtruth_props
@@ -145,6 +216,7 @@ def _start_job(context: bpy.types.Context, *, mode: str, frame_start: int, frame
     # Initialize shared job state.
     JOB.active = True
     JOB.mode = mode
+    JOB.output_format = str(getattr(props, "output_format", "XMP"))
     JOB.camera_name = cam.name
     JOB.out_dir = out_dir
     JOB.image_pattern = str(props.image_pattern)
@@ -157,6 +229,7 @@ def _start_job(context: bpy.types.Context, *, mode: str, frame_start: int, frame
     JOB.distortion_k4 = float(getattr(props, "distortion_k4", 0.0))
     JOB.distortion_t1 = float(getattr(props, "distortion_t1", 0.0))
     JOB.distortion_t2 = float(getattr(props, "distortion_t2", 0.0))
+    JOB.metashape_xml_filename = str(getattr(props, "metashape_xml_filename", "metashape.xml") or "metashape.xml")
     JOB.last_error = ""
     JOB.wrote_xmp = 0
     JOB.blend_path = blend_path
@@ -221,6 +294,7 @@ def _internal_start_render(context: bpy.types.Context, *, is_animation: bool) ->
 
     JOB.active = True
     JOB.mode = "internal_animation" if is_animation else "internal_frame"
+    JOB.output_format = str(getattr(props, "output_format", "XMP"))
     JOB.camera_name = cam.name
     JOB.scene_name = scene.name
     JOB.out_dir = os.path.dirname(scene.render.filepath) if bool(props.use_scene_render_output) else bpy.path.abspath(props.out_dir)
@@ -234,6 +308,7 @@ def _internal_start_render(context: bpy.types.Context, *, is_animation: bool) ->
     JOB.distortion_k4 = float(getattr(props, "distortion_k4", 0.0))
     JOB.distortion_t1 = float(getattr(props, "distortion_t1", 0.0))
     JOB.distortion_t2 = float(getattr(props, "distortion_t2", 0.0))
+    JOB.metashape_xml_filename = str(getattr(props, "metashape_xml_filename", "metashape.xml") or "metashape.xml")
     JOB.last_error = ""
     JOB.wrote_xmp = 0
     JOB.cancel_requested = False
@@ -299,33 +374,39 @@ def _finalize_available_frames(context: bpy.types.Context, *, out_base: str) -> 
         if not os.path.exists(img_path):
             break
 
-        xmp_path = xmp_path_for_image_path(img_path)
-        try:
-            print(f"[GroundTruth] finalize: frame={frame} img={img_path!r} xmp={xmp_path!r}")
-            write_xmp_for_camera_at_frame(
-                scene=scene,
-                depsgraph=depsgraph,
-                cam_obj=cam,
-                frame=frame,
-                xmp_path=xmp_path,
-                prior=str(JOB.prior),
-                rotation_mode=str(JOB.rotation_mode),
-                distortion_model=str(JOB.distortion_model),
-                k1=float(JOB.distortion_k1),
-                k2=float(JOB.distortion_k2),
-                k3=float(JOB.distortion_k3),
-                k4=float(JOB.distortion_k4),
-                t1=float(JOB.distortion_t1),
-                t2=float(JOB.distortion_t2),
-                set_frame=True,
-            )
+        if str(JOB.output_format) == "XMP":
+            xmp_path = xmp_path_for_image_path(img_path)
+            try:
+                print(f"[GroundTruth] finalize: frame={frame} img={img_path!r} xmp={xmp_path!r}")
+                write_xmp_for_camera_at_frame(
+                    scene=scene,
+                    depsgraph=depsgraph,
+                    cam_obj=cam,
+                    frame=frame,
+                    xmp_path=xmp_path,
+                    prior=str(JOB.prior),
+                    rotation_mode=str(JOB.rotation_mode),
+                    distortion_model=str(JOB.distortion_model),
+                    k1=float(JOB.distortion_k1),
+                    k2=float(JOB.distortion_k2),
+                    k3=float(JOB.distortion_k3),
+                    k4=float(JOB.distortion_k4),
+                    t1=float(JOB.distortion_t1),
+                    t2=float(JOB.distortion_t2),
+                    set_frame=True,
+                )
+            except Exception as e:
+                JOB.last_error = str(e)
+                print(f"[GroundTruth] finalize: ERROR frame={frame} err={e!r}")
+                print(traceback.format_exc())
+                JOB.next_frame_to_finalize = frame + int(JOB.frame_step)
+                continue
 
+        try:
+            # Stats table (last finalized frame).
             focal_35, pos3, rot9, fx, fy, cx, cy = camera_stats_at_frame(
                 scene=scene, depsgraph=depsgraph, cam_obj=cam, frame=frame, rotation_mode=str(JOB.rotation_mode), set_frame=False
             )
-
-            JOB.last_frame_done = frame
-            JOB.last_image_path = img_path
             JOB.last_focal_35mm = float(focal_35)
             JOB.last_fx_px = float(fx)
             JOB.last_fy_px = float(fy)
@@ -333,14 +414,73 @@ def _finalize_available_frames(context: bpy.types.Context, *, out_base: str) -> 
             JOB.last_cy_px = float(cy)
             JOB.last_pos_xyz = tuple(pos3)
             JOB.last_rot_row_major9 = tuple(rot9)
+        except Exception:
+            pass
+
+        JOB.last_frame_done = frame
+        JOB.last_image_path = img_path
+        if str(JOB.output_format) == "XMP":
             JOB.wrote_xmp += 1
-        except Exception as e:
-            JOB.last_error = str(e)
-            print(f"[GroundTruth] finalize: ERROR frame={frame} err={e!r}")
-            break
 
         _show_image_in_any_image_editor(context, img_path)
         JOB.next_frame_to_finalize = frame + int(JOB.frame_step)
+
+
+def _final_pass_write_missing_xmps(context: bpy.types.Context, *, out_base: str) -> None:
+    if not JOB.active:
+        return
+    if JOB.cancel_requested:
+        return
+    if str(JOB.output_format) != "XMP":
+        return
+
+    scene = context.scene
+    cam = bpy.data.objects.get(JOB.camera_name)
+    if cam is None or cam.type != "CAMERA":
+        return
+
+    frames = list(range(int(JOB.frame_start), int(JOB.frame_end) + 1, int(JOB.frame_step)))
+    if not frames:
+        return
+
+    restore_frame = int(scene.frame_current)
+    try:
+        for frame in frames:
+            img_path = _frame_path_with_base(scene, out_base, int(frame))
+            if not img_path or not os.path.exists(img_path):
+                continue
+            xmp_path = xmp_path_for_image_path(img_path)
+            if os.path.exists(xmp_path):
+                continue
+            try:
+                print(f"[GroundTruth] final_pass: missing xmp frame={frame} -> {xmp_path!r}")
+                write_xmp_for_camera_at_frame(
+                    scene=scene,
+                    depsgraph=None,
+                    cam_obj=cam,
+                    frame=int(frame),
+                    xmp_path=xmp_path,
+                    prior=str(JOB.prior),
+                    rotation_mode=str(JOB.rotation_mode),
+                    distortion_model=str(JOB.distortion_model),
+                    k1=float(JOB.distortion_k1),
+                    k2=float(JOB.distortion_k2),
+                    k3=float(JOB.distortion_k3),
+                    k4=float(JOB.distortion_k4),
+                    t1=float(JOB.distortion_t1),
+                    t2=float(JOB.distortion_t2),
+                    set_frame=True,
+                )
+                JOB.wrote_xmp += 1
+            except Exception as e:
+                JOB.last_error = str(e)
+                print(f"[GroundTruth] final_pass: ERROR frame={frame} err={e!r}")
+                print(traceback.format_exc())
+    finally:
+        try:
+            scene.frame_set(int(restore_frame))
+        except Exception:
+            pass
 
 
 def _finish_job(context: bpy.types.Context) -> None:
@@ -384,6 +524,8 @@ class _GROUNDTRUTH_OT_render_base(Operator):
                 JOB.proc_returncode = int(rc)
                 # Final flush in case last frame appeared just before process exit.
                 _finalize_available_frames(context, out_base=self._out_base)
+                _final_pass_write_missing_xmps(context, out_base=self._out_base)
+                _maybe_write_metashape_xml(context, out_base=self._out_base)
                 self._stop_modal(context)
                 _finish_job(context)
                 if rc != 0 and not JOB.cancel_requested:
@@ -420,6 +562,9 @@ class GROUNDTRUTH_OT_render_frame_and_xmp(_GROUNDTRUTH_OT_render_base):
             self.report({"ERROR"}, "GroundTruth job already active")
             return {"CANCELLED"}
         props = context.scene.groundtruth_props
+        if str(getattr(props, "output_format", "XMP")) != "XMP":
+            self.report({"ERROR"}, "GroundTruth Output is not set to XMP")
+            return {"CANCELLED"}
         if str(props.render_backend) == "INTERNAL":
             try:
                 _internal_start_render(context, is_animation=False)
@@ -446,6 +591,58 @@ class GROUNDTRUTH_OT_render_animation_and_xmp(_GROUNDTRUTH_OT_render_base):
             self.report({"ERROR"}, "GroundTruth job already active")
             return {"CANCELLED"}
         props = context.scene.groundtruth_props
+        if str(getattr(props, "output_format", "XMP")) != "XMP":
+            self.report({"ERROR"}, "GroundTruth Output is not set to XMP")
+            return {"CANCELLED"}
+        if props.frame_step <= 0:
+            self.report({"ERROR"}, "Frame step must be > 0")
+            return {"CANCELLED"}
+        if props.frame_end < props.frame_start:
+            self.report({"ERROR"}, "End frame must be >= Start frame")
+            return {"CANCELLED"}
+        if str(props.render_backend) == "INTERNAL":
+            try:
+                _internal_start_render(context, is_animation=True)
+            except Exception as e:
+                self.report({"ERROR"}, str(e))
+                return {"CANCELLED"}
+            return {"FINISHED"}
+        try:
+            if bool(props.use_scene_frame_range):
+                self._start(
+                    context,
+                    mode="external_animation",
+                    frame_start=int(context.scene.frame_start),
+                    frame_end=int(context.scene.frame_end),
+                    frame_step=int(context.scene.frame_step),
+                )
+            else:
+                self._start(
+                    context,
+                    mode="external_animation",
+                    frame_start=int(props.frame_start),
+                    frame_end=int(props.frame_end),
+                    frame_step=int(props.frame_step),
+                )
+        except Exception as e:
+            self.report({"ERROR"}, str(e))
+            return {"CANCELLED"}
+        return {"RUNNING_MODAL"}
+
+
+class GROUNDTRUTH_OT_render_animation_and_metashape(_GROUNDTRUTH_OT_render_base):
+    bl_idname = "groundtruth.render_animation_and_metashape"
+    bl_label = "Render Animation + Metashape XML"
+    bl_description = "Render a frame range and write a single Metashape/Agisoft XML (backend selectable)."
+
+    def invoke(self, context, event):
+        if JOB.active:
+            self.report({"ERROR"}, "GroundTruth job already active")
+            return {"CANCELLED"}
+        props = context.scene.groundtruth_props
+        if str(getattr(props, "output_format", "XMP")) != "METASHAPE":
+            self.report({"ERROR"}, "GroundTruth Output is not set to Metashape XML")
+            return {"CANCELLED"}
         if props.frame_step <= 0:
             self.report({"ERROR"}, "Frame step must be > 0")
             return {"CANCELLED"}

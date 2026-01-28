@@ -35,6 +35,9 @@ class GROUNDTRUTH_OT_export_xmp_range(Operator):
 
     def invoke(self, context, event):
         props = context.scene.groundtruth_props
+        if str(getattr(props, "output_format", "XMP")) != "XMP":
+            self.report({"ERROR"}, "GroundTruth Output is not set to XMP")
+            return {"CANCELLED"}
         cam = props.camera_obj or context.scene.camera
         if cam is None or cam.type != "CAMERA":
             self.report({"ERROR"}, "No camera selected (set Camera or scene active camera)")

@@ -9,9 +9,11 @@
 
 import bpy
 
+from .export_metashape_xml import GROUNDTRUTH_OT_export_metashape_xml_range
 from .export_xmp_range import GROUNDTRUTH_OT_export_xmp_range
 from .render_and_xmp import (
     GROUNDTRUTH_OT_cancel,
+    GROUNDTRUTH_OT_render_animation_and_metashape,
     GROUNDTRUTH_OT_render_animation_and_xmp,
     GROUNDTRUTH_OT_render_frame_and_xmp,
 )
@@ -19,8 +21,10 @@ from .render_and_xmp import (
 
 classes = (
     GROUNDTRUTH_OT_export_xmp_range,
+    GROUNDTRUTH_OT_export_metashape_xml_range,
     GROUNDTRUTH_OT_render_frame_and_xmp,
     GROUNDTRUTH_OT_render_animation_and_xmp,
+    GROUNDTRUTH_OT_render_animation_and_metashape,
     GROUNDTRUTH_OT_cancel,
 )
 
@@ -33,4 +37,3 @@ def register():
 def unregister():
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
-

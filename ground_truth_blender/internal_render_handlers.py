@@ -12,8 +12,12 @@ from __future__ import annotations
 import bpy
 import time
 import os
+import traceback
+
+from bpy.app.handlers import persistent
 
 from .runtime import JOB
+from .utils.agisoft_xml import write_metashape_xml_for_frames
 from .utils.rc_xmp import camera_stats_at_frame, write_xmp_for_camera_at_frame, xmp_path_for_image_path
 
 
@@ -77,6 +81,58 @@ def _job_scene() -> bpy.types.Scene | None:
         return None
 
 
+def _finalize_missing_xmps(scene: bpy.types.Scene, *, cam: bpy.types.Object, is_animation: bool) -> None:
+    if str(JOB.output_format) != "XMP":
+        return
+    frames = list(range(int(JOB.frame_start), int(JOB.frame_end) + 1, int(JOB.frame_step)))
+    if not frames:
+        return
+
+    restore_frame = int(scene.frame_current)
+    wrote = 0
+    try:
+        for frame in frames:
+            img_path = _render_output_path(scene, int(frame), is_animation=is_animation)
+            if not img_path or not os.path.exists(img_path):
+                continue
+            xmp_path = xmp_path_for_image_path(img_path)
+            if os.path.exists(xmp_path):
+                continue
+            try:
+                _dbg(f"finalize_missing_xmps: frame={frame} -> {xmp_path}")
+                write_xmp_for_camera_at_frame(
+                    scene=scene,
+                    depsgraph=None,
+                    cam_obj=cam,
+                    frame=int(frame),
+                    xmp_path=xmp_path,
+                    prior=str(JOB.prior),
+                    rotation_mode=str(JOB.rotation_mode),
+                    distortion_model=str(JOB.distortion_model),
+                    k1=float(JOB.distortion_k1),
+                    k2=float(JOB.distortion_k2),
+                    k3=float(JOB.distortion_k3),
+                    k4=float(JOB.distortion_k4),
+                    t1=float(JOB.distortion_t1),
+                    t2=float(JOB.distortion_t2),
+                    set_frame=True,
+                )
+                wrote += 1
+                JOB.wrote_xmp += 1
+            except Exception as e:
+                JOB.last_error = f"XMP finalize error at frame {frame}: {e}"
+                _dbg(f"finalize_missing_xmps: ERROR frame={frame} err={e!r}")
+                _dbg(traceback.format_exc().strip())
+    finally:
+        try:
+            scene.frame_set(restore_frame)
+        except Exception:
+            pass
+    if wrote:
+        _dbg(f"finalize_missing_xmps: wrote={wrote}")
+
+
+@persistent
 def on_render_write(scene: bpy.types.Scene, depsgraph: bpy.types.Depsgraph) -> None:
     # Always log when this handler fires; helps debugging when users report missing XMPs.
     _dbg(f"render_write: scene={scene.name!r} frame={scene.frame_current} JOB.active={JOB.active} JOB.mode={JOB.mode!r}")
@@ -114,25 +170,27 @@ def on_render_write(scene: bpy.types.Scene, depsgraph: bpy.types.Depsgraph) -> N
     JOB.last_image_path = img_path
 
     try:
-        xmp_path = xmp_path_for_image_path(img_path)
-        _dbg(f"render_write: writing xmp -> {xmp_path}")
-        write_xmp_for_camera_at_frame(
-            scene=scene,
-            depsgraph=depsgraph,
-            cam_obj=cam,
-            frame=frame,
-            xmp_path=xmp_path,
-            prior=str(JOB.prior),
-            rotation_mode=str(JOB.rotation_mode),
-            distortion_model=str(JOB.distortion_model),
-            k1=float(JOB.distortion_k1),
-            k2=float(JOB.distortion_k2),
-            k3=float(JOB.distortion_k3),
-            k4=float(JOB.distortion_k4),
-            t1=float(JOB.distortion_t1),
-            t2=float(JOB.distortion_t2),
-            set_frame=False,
-        )
+        if str(JOB.output_format) == "XMP":
+            xmp_path = xmp_path_for_image_path(img_path)
+            _dbg(f"render_write: writing xmp -> {xmp_path}")
+            write_xmp_for_camera_at_frame(
+                scene=scene,
+                depsgraph=depsgraph,
+                cam_obj=cam,
+                frame=frame,
+                xmp_path=xmp_path,
+                prior=str(JOB.prior),
+                rotation_mode=str(JOB.rotation_mode),
+                distortion_model=str(JOB.distortion_model),
+                k1=float(JOB.distortion_k1),
+                k2=float(JOB.distortion_k2),
+                k3=float(JOB.distortion_k3),
+                k4=float(JOB.distortion_k4),
+                t1=float(JOB.distortion_t1),
+                t2=float(JOB.distortion_t2),
+                set_frame=False,
+            )
+            JOB.wrote_xmp += 1
 
         focal_35, pos3, rot9, fx, fy, cx, cy = camera_stats_at_frame(
             scene=scene, depsgraph=depsgraph, cam_obj=cam, frame=frame, rotation_mode=str(JOB.rotation_mode), set_frame=False
@@ -146,23 +204,64 @@ def on_render_write(scene: bpy.types.Scene, depsgraph: bpy.types.Depsgraph) -> N
         JOB.last_cy_px = float(cy)
         JOB.last_pos_xyz = tuple(pos3)
         JOB.last_rot_row_major9 = tuple(rot9)
-        JOB.wrote_xmp += 1
-        _dbg(f"render_write: ok (wrote_xmp={JOB.wrote_xmp})")
+        _dbg(f"render_write: ok (format={JOB.output_format} wrote_xmp={JOB.wrote_xmp})")
     except Exception as e:
         JOB.last_error = str(e)
         _dbg(f"render_write: ERROR {e}")
+        _dbg(traceback.format_exc().strip())
         return
 
     # Some Blender builds call render_post before render_write; delay cleanup until after the write.
     if JOB.internal_post_pending:
         if int(scene.frame_current) >= int(JOB.frame_end):
             _dbg("render_write: finalize-after-post")
+            _finalize_missing_xmps(scene, cam=cam, is_animation=(JOB.mode == "internal_animation"))
+            if str(JOB.output_format) == "METASHAPE":
+                try:
+                    frames = list(range(int(JOB.frame_start), int(JOB.frame_end) + 1, int(JOB.frame_step)))
+                    out_dir = os.path.dirname(str(JOB.last_image_path)) if JOB.last_image_path else ""
+                    if not out_dir:
+                        out_dir = os.path.dirname(img_path) if img_path else ""
+                    name = str(JOB.metashape_xml_filename or "metashape.xml")
+                    if not name.lower().endswith(".xml"):
+                        name = name + ".xml"
+                    out_xml_path = name
+                    if not (os.path.isabs(out_xml_path) or out_xml_path.startswith("//")):
+                        out_xml_path = os.path.join(out_dir or ".", out_xml_path)
+
+                    def label_for_frame(frame_i: int) -> str:
+                        p = _render_output_path(scene, int(frame_i), is_animation=(JOB.mode == "internal_animation"))
+                        return os.path.basename(p)
+
+                    _dbg(f"metashape_xml: writing -> {out_xml_path}")
+                    write_metashape_xml_for_frames(
+                        scene=scene,
+                        cam_obj=cam,
+                        frames=frames,
+                        image_label_for_frame=label_for_frame,
+                        out_xml_path=out_xml_path,
+                        rotation_mode=str(JOB.rotation_mode),
+                        distortion_mode=str(JOB.distortion_model),
+                        k1=float(JOB.distortion_k1),
+                        k2=float(JOB.distortion_k2),
+                        k3=float(JOB.distortion_k3),
+                        k4=float(JOB.distortion_k4),
+                        t1=float(JOB.distortion_t1),
+                        t2=float(JOB.distortion_t2),
+                    )
+                    _dbg("metashape_xml: ok")
+                except Exception as e:
+                    JOB.last_error = f"Metashape XML error: {e}"
+                    _dbg(f"metashape_xml: ERROR {e!r}")
+                    _dbg(traceback.format_exc().strip())
+
             _restore_internal_output(scene)
             JOB.active = False
             JOB.mode = ""
             JOB.internal_post_pending = False
 
 
+@persistent
 def on_render_pre(scene: bpy.types.Scene, depsgraph: bpy.types.Depsgraph) -> None:
     # This fires reliably when internal render starts; use it to avoid relying on is_job_running being true.
     if JOB.mode.startswith("internal_") or JOB.has_internal_output_override:
@@ -170,11 +269,13 @@ def on_render_pre(scene: bpy.types.Scene, depsgraph: bpy.types.Depsgraph) -> Non
         _dbg(f"render_pre: scene={scene.name!r} mode={JOB.mode!r}")
 
 
+@persistent
 def on_render_complete(scene: bpy.types.Scene, depsgraph: bpy.types.Depsgraph) -> None:
     if JOB.mode.startswith("internal_") or JOB.has_internal_output_override:
         _dbg(f"render_complete: scene={scene.name!r} frame={scene.frame_current}")
 
 
+@persistent
 def on_render_cancel(scene: bpy.types.Scene, depsgraph: bpy.types.Depsgraph) -> None:
     if not (JOB.mode.startswith("internal_") or JOB.has_internal_output_override or JOB.internal_post_pending):
         return
@@ -185,6 +286,7 @@ def on_render_cancel(scene: bpy.types.Scene, depsgraph: bpy.types.Depsgraph) -> 
     JOB.internal_post_pending = False
 
 
+@persistent
 def on_render_post(scene: bpy.types.Scene, depsgraph: bpy.types.Depsgraph) -> None:
     if not (JOB.mode.startswith("internal_") or JOB.has_internal_output_override):
         return
@@ -215,11 +317,54 @@ def _monitor_tick() -> float | None:
             if JOB.internal_not_running_since_s == 0.0:
                 JOB.internal_not_running_since_s = now
                 return 0.25
-            if now - float(JOB.internal_not_running_since_s) < 10.0:
+            # Give Blender a moment to finish file IO and call render_write/render_post.
+            if now - float(JOB.internal_not_running_since_s) < 1.0:
                 return 0.25
             sc = _job_scene()
             if sc is not None:
-                _dbg("monitor: timeout finalize")
+                cam = _job_camera(sc)
+                if cam is not None:
+                    try:
+                        _dbg("monitor: finalize (no render_post/render_write callbacks)")
+                        _finalize_missing_xmps(sc, cam=cam, is_animation=(JOB.mode == "internal_animation"))
+                        if str(JOB.output_format) == "METASHAPE":
+                            frames = list(range(int(JOB.frame_start), int(JOB.frame_end) + 1, int(JOB.frame_step)))
+                            if frames:
+                                out_dir = os.path.dirname(
+                                    _render_output_path(sc, int(frames[-1]), is_animation=(JOB.mode == "internal_animation"))
+                                )
+                                name = str(JOB.metashape_xml_filename or "metashape.xml")
+                                if not name.lower().endswith(".xml"):
+                                    name = name + ".xml"
+                                out_xml_path = name
+                                if not (os.path.isabs(out_xml_path) or out_xml_path.startswith("//")):
+                                    out_xml_path = os.path.join(out_dir or ".", out_xml_path)
+
+                                def label_for_frame(frame_i: int) -> str:
+                                    p = _render_output_path(sc, int(frame_i), is_animation=(JOB.mode == "internal_animation"))
+                                    return os.path.basename(p)
+
+                                _dbg(f"metashape_xml: writing -> {out_xml_path}")
+                                write_metashape_xml_for_frames(
+                                    scene=sc,
+                                    cam_obj=cam,
+                                    frames=frames,
+                                    image_label_for_frame=label_for_frame,
+                                    out_xml_path=out_xml_path,
+                                    rotation_mode=str(JOB.rotation_mode),
+                                    distortion_mode=str(JOB.distortion_model),
+                                    k1=float(JOB.distortion_k1),
+                                    k2=float(JOB.distortion_k2),
+                                    k3=float(JOB.distortion_k3),
+                                    k4=float(JOB.distortion_k4),
+                                    t1=float(JOB.distortion_t1),
+                                    t2=float(JOB.distortion_t2),
+                                )
+                                _dbg("metashape_xml: ok")
+                    except Exception as e:
+                        JOB.last_error = str(e)
+                        _dbg(f"monitor: finalize ERROR {e!r}")
+                        _dbg(traceback.format_exc().strip())
                 _restore_internal_output(sc)
             JOB.active = False
             JOB.mode = ""

@@ -66,8 +66,30 @@ class GROUNDTRUTH_PT_main(Panel):
         box = col.box()
         box_col = box.column(align=True)
         box_col.label(text="Inputs:")
+        row = box_col.row(align=True)
+        row.prop(props, "output_format", expand=True)
         box_col.prop(props, "render_backend")
         box_col.prop(props, "camera_obj")
+
+        col.separator()
+
+        # Distortion (shared by both XMP and Metashape XML outputs)
+        box = col.box()
+        box_col = box.column(align=True)
+        box_col.label(text="Distortion:")
+        box_col.prop(props, "distortion_model")
+        if props.distortion_model == "brown":
+            box_col.separator()
+            box_col.label(text="Coeffs (RC order):")
+            row = box_col.row(align=True)
+            row.prop(props, "distortion_k1")
+            row.prop(props, "distortion_k2")
+            row = box_col.row(align=True)
+            row.prop(props, "distortion_k3")
+            row.prop(props, "distortion_k4")
+            row = box_col.row(align=True)
+            row.prop(props, "distortion_t1")
+            row.prop(props, "distortion_t2")
 
         col.separator()
 
@@ -79,28 +101,19 @@ class GROUNDTRUTH_PT_main(Panel):
         box_col.prop(props, "use_scene_frame_range")
         box_col.prop(props, "out_dir")
         box_col.prop(props, "image_pattern")
+        if str(props.output_format) == "METASHAPE":
+            box_col.separator()
+            box_col.prop(props, "metashape_xml_filename")
 
         col.separator()
 
         # Export params
-        box = col.box()
-        box_col = box.column(align=True)
-        box_col.label(text="XMP Params:")
-        box_col.prop(props, "prior")
-        box_col.prop(props, "rotation_mode")
-        box_col.prop(props, "distortion_model")
-        if props.distortion_model == "brown":
-            box_col.separator()
-            box_col.label(text="Distortion Coeffs (RC):")
-            row = box_col.row(align=True)
-            row.prop(props, "distortion_k1")
-            row.prop(props, "distortion_k2")
-            row = box_col.row(align=True)
-            row.prop(props, "distortion_k3")
-            row.prop(props, "distortion_k4")
-            row = box_col.row(align=True)
-            row.prop(props, "distortion_t1")
-            row.prop(props, "distortion_t2")
+        if str(props.output_format) == "XMP":
+            box = col.box()
+            box_col = box.column(align=True)
+            box_col.label(text="XMP Params:")
+            box_col.prop(props, "prior")
+            box_col.prop(props, "rotation_mode")
 
         col.separator()
 
@@ -116,18 +129,27 @@ class GROUNDTRUTH_PT_main(Panel):
         col.separator()
 
         # Actions
-        row = col.row(align=True)
-        row.operator("groundtruth.export_xmp_range", icon="EXPORT", text="Export XMP (Range)")
+        if str(props.output_format) == "XMP":
+            row = col.row(align=True)
+            row.operator("groundtruth.export_xmp_range", icon="EXPORT", text="Export XMP (Range)")
+        else:
+            row = col.row(align=True)
+            row.operator("groundtruth.export_metashape_xml_range", icon="EXPORT", text="Export Metashape XML (Range)")
 
         col.separator()
 
-        row = col.row(align=True)
-        row.enabled = not JOB.active
-        row.operator("groundtruth.render_frame_and_xmp", icon="RENDER_STILL", text="Render Frame + XMP")
+        if str(props.output_format) == "XMP":
+            row = col.row(align=True)
+            row.enabled = not JOB.active
+            row.operator("groundtruth.render_frame_and_xmp", icon="RENDER_STILL", text="Render Frame + XMP")
 
-        row = col.row(align=True)
-        row.enabled = not JOB.active
-        row.operator("groundtruth.render_animation_and_xmp", icon="RENDER_ANIMATION", text="Render Animation + XMP")
+            row = col.row(align=True)
+            row.enabled = not JOB.active
+            row.operator("groundtruth.render_animation_and_xmp", icon="RENDER_ANIMATION", text="Render Animation + XMP")
+        else:
+            row = col.row(align=True)
+            row.enabled = not JOB.active
+            row.operator("groundtruth.render_animation_and_metashape", icon="RENDER_ANIMATION", text="Render Animation + XML")
 
         row = col.row(align=True)
         row.enabled = JOB.active

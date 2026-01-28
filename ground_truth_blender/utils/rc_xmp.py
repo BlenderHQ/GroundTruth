@@ -259,7 +259,9 @@ def write_xmp_for_camera_at_frame(
     pos3 = (float(C.x), float(C.y), float(C.z))
 
     txt = xmp_text(cfg=cfg, focal_length_35mm_value=focal_35, rotation_row_major9=rot9, position_xyz=pos3)
-    os.makedirs(os.path.dirname(xmp_path), exist_ok=True)
+    out_dir = os.path.dirname(xmp_path)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
     with open(xmp_path, "wb") as f:
         f.write(txt.encode("utf-8"))
 

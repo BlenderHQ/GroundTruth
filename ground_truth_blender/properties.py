@@ -13,6 +13,16 @@ from bpy.types import PropertyGroup
 
 
 class GroundTruthSceneProperties(PropertyGroup):
+    output_format: EnumProperty(
+        name="Output",
+        description="What GroundTruth exports",
+        items=[
+            ("XMP", "RC/RS XMP", "Write one .xmp per frame (sidecar next to each rendered image)"),
+            ("METASHAPE", "AP/AM XML", "Write a single Metashape/Agisoft XML for the selected frame range"),
+        ],
+        default="XMP",
+    )
+
     render_backend: EnumProperty(
         name="Render Backend",
         description="Internal uses Blender's render UI/preview; External is cancelable and isolated",
@@ -57,6 +67,12 @@ class GroundTruthSceneProperties(PropertyGroup):
     frame_start: IntProperty(name="Start", default=1, min=-1000000, max=1000000)
     frame_end: IntProperty(name="End", default=250, min=-1000000, max=1000000)
     frame_step: IntProperty(name="Step", default=1, min=1, max=1000000)
+
+    metashape_xml_filename: StringProperty(
+        name="Metashape XML",
+        description="Filename for Metashape/Agisoft XML written into the output directory",
+        default="metashape.xml",
+    )
 
     prior: EnumProperty(
         name="Prior",

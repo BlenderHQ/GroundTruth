@@ -5,10 +5,12 @@ Exports **RealityCapture/RealityScan-style XMP camera priors** (`xcr:` namespace
 ## Features
 
 - Export one `.xmp` per frame (RC-style `<xcr:Rotation>`, `<xcr:Position>`, intrinsics).
+- Export a single **Metashape/Agisoft XML** (one camera per frame) matching the same animation.
 - `Render Frame + XMP` and `Render Animation + XMP`:
   - **Internal** backend uses Blender’s normal render UI/preview.
   - **External** backend runs a background Blender render (reliable cancel).
 - `Export XMP (Range)` writes XMPs without rendering.
+- `Export Metashape XML (Range)` writes a single `*.xml` without rendering.
 - Principal point is exported as **zero** (`xcr:PrincipalPointU/V = 0`).
 - Distortion model:
   - `Perspective`: coefficients exported as zeros.
@@ -35,6 +37,7 @@ Key options:
 - `Camera`: defaults to the scene active camera.
 - `Use Scene Render Output`: names XMP sidecars next to Blender’s render output (`scene.render.filepath` / `frame_path`).
 - `Use Scene Frame Range`: uses `scene.frame_start/end/step` for animation operations.
+- `Write Metashape XML`: after render, also writes `Metashape XML` into the output directory.
 
 ### Output naming
 

@@ -16,6 +16,7 @@ from dataclasses import dataclass
 class GroundTruthJob:
     active: bool = False
     mode: str = ""  # "internal_frame", "internal_animation", "external_frame", "external_animation"
+    output_format: str = "XMP"  # "XMP" or "METASHAPE"
     camera_name: str = ""
     scene_name: str = ""
     out_dir: str = ""
@@ -29,6 +30,7 @@ class GroundTruthJob:
     distortion_k4: float = 0.0
     distortion_t1: float = 0.0
     distortion_t2: float = 0.0
+    metashape_xml_filename: str = "metashape.xml"
     last_error: str = ""
     wrote_xmp: int = 0
 
