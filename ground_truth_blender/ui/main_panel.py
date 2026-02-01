@@ -99,8 +99,12 @@ class GROUNDTRUTH_PT_main(Panel):
         box_col.label(text="Output:")
         box_col.prop(props, "use_scene_render_output")
         box_col.prop(props, "use_scene_frame_range")
-        box_col.prop(props, "out_dir")
-        box_col.prop(props, "image_pattern")
+        naming_col = box_col.column(align=True)
+        naming_col.enabled = not bool(props.use_scene_render_output)
+        naming_col.prop(props, "out_dir")
+        naming_col.prop(props, "image_pattern")
+        if bool(props.use_scene_render_output):
+            box_col.label(text="Naming uses scene Render Output", icon="INFO")
         if str(props.output_format) == "METASHAPE":
             box_col.separator()
             box_col.prop(props, "metashape_xml_filename")
@@ -122,9 +126,12 @@ class GROUNDTRUTH_PT_main(Panel):
         box_col = box.column(align=True)
         box_col.label(text="Range:")
         row = box_col.row(align=True)
+        row.enabled = not bool(props.use_scene_frame_range)
         row.prop(props, "frame_start")
         row.prop(props, "frame_end")
         row.prop(props, "frame_step")
+        if bool(props.use_scene_frame_range):
+            box_col.label(text="Range uses scene frame start/end/step", icon="INFO")
 
         col.separator()
 

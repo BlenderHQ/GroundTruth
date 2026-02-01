@@ -25,6 +25,79 @@ def _scene_output_dir(scene: bpy.types.Scene, frame: int) -> str:
     return d or "."
 
 
+_IMAGE_EXTS = {
+    ".bmp",
+    ".cin",
+    ".dng",
+    ".dpx",
+    ".exr",
+    ".hdr",
+    ".jpeg",
+    ".jpg",
+    ".jp2",
+    ".png",
+    ".ppm",
+    ".tga",
+    ".tif",
+    ".tiff",
+    ".webp",
+}
+
+
+def _warn_if_scene_render_output_looks_misconfigured(op: Operator, scene: bpy.types.Scene) -> None:
+    # Common pitfall: users set Render Output to a filename like "IMG.JPG", expecting "IMG_0000.jpg",
+    # but Blender will treat it as the base and append the frame + extension -> "IMG.JPG0000.jpg".
+    try:
+        fp = bpy.path.abspath(scene.render.filepath)
+    except Exception:
+        fp = str(scene.render.filepath)
+    base = os.path.basename(fp)
+    ext = os.path.splitext(base)[1].lower()
+    if ext in _IMAGE_EXTS:
+        op.report(
+            {"WARNING"},
+            "Render Output looks like a filename with an extension; animation naming will be like 'NAME0000.jpg'.",
+        )
+
+    try:
+        if not bool(scene.render.use_file_extension):
+            op.report({"WARNING"}, "Render Output: 'File Extensions' is disabled; photo labels may miss extensions.")
+    except Exception:
+        pass
+
+
+def _warn_if_labels_dont_match_existing_photos(
+    op: Operator, *, out_dir_abs: str, frames: list[int], label_for_frame
+) -> None:
+    try:
+        names = os.listdir(out_dir_abs)
+    except Exception:
+        return
+
+    photos = [n for n in names if os.path.splitext(n)[1].lower() in _IMAGE_EXTS]
+    if not photos:
+        return
+    photo_set = set(photos)
+
+    sample_frames = frames[: min(10, len(frames))]
+    sample_labels = [os.path.basename(str(label_for_frame(int(f)))) for f in sample_frames]
+    if any(lab in photo_set for lab in sample_labels):
+        return
+
+    # No matches in the directory: Metashape will import cameras but won't assign transforms to photos.
+    op.report(
+        {"WARNING"},
+        "No matching photo filenames found for generated labels; check 'Use Scene Render Output' / 'Image Pattern'.",
+    )
+    try:
+        print(
+            f"[GroundTruth] export_metashape_xml: WARNING no label/photo matches in {out_dir_abs!r};"
+            f" example_label={sample_labels[0]!r} example_photo={photos[0]!r}"
+        )
+    except Exception:
+        pass
+
+
 class GROUNDTRUTH_OT_export_metashape_xml_range(Operator):
     bl_idname = "groundtruth.export_metashape_xml_range"
     bl_label = "Export Metashape XML (Range)"
@@ -61,6 +134,7 @@ class GROUNDTRUTH_OT_export_metashape_xml_range(Operator):
         frames = list(range(fs, fe + 1, step))
 
         if bool(props.use_scene_render_output):
+            _warn_if_scene_render_output_looks_misconfigured(self, scene)
             out_dir = _scene_output_dir(scene, frames[0])
             label_for_frame = lambda f: os.path.basename(scene.render.frame_path(frame=int(f)))
         else:
@@ -77,6 +151,8 @@ class GROUNDTRUTH_OT_export_metashape_xml_range(Operator):
         out_xml = name
         if not (os.path.isabs(out_xml) or out_xml.startswith("//")):
             out_xml = os.path.join(out_dir, out_xml)
+
+        _warn_if_labels_dont_match_existing_photos(self, out_dir_abs=bpy.path.abspath(out_dir), frames=frames, label_for_frame=label_for_frame)
 
         try:
             write_metashape_xml_for_frames(
