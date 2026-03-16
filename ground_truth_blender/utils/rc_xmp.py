@@ -116,9 +116,15 @@ def mat3_to_row_major9(m: Matrix) -> Tuple[float, ...]:
     )
 
 
+def _camera_rotation_world_matrix(cam_matrix_world: Matrix) -> Matrix:
+    # Parent or constraint scale should not leak into exported orientation.
+    _loc, rot, _scale = cam_matrix_world.decompose()
+    return rot.to_matrix()
+
+
 def rotation_from_camera(*, cam_matrix_world: Matrix, rotation_mode: str) -> Matrix:
     # Blender camera local frame: x right, y up, -z forward.
-    Rwc_bl = cam_matrix_world.to_3x3()
+    Rwc_bl = _camera_rotation_world_matrix(cam_matrix_world)
 
     if rotation_mode in ("blender_rwc", "blender_rcw"):
         R = Rwc_bl
