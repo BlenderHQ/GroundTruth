@@ -116,6 +116,7 @@ class GROUNDTRUTH_PT_main(Panel):
             box = col.box()
             box_col = box.column(align=True)
             box_col.label(text="XMP Params:")
+            box_col.prop(props, "projection_model")
             box_col.prop(props, "prior")
             box_col.prop(props, "rotation_mode")
 

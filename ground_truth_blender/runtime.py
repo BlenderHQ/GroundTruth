@@ -23,6 +23,7 @@ class GroundTruthJob:
     image_pattern: str = "frame_{frame:04d}.png"
     prior: str = "exact"
     rotation_mode: str = "rc_rcw"
+    projection_model: str = "auto"
     distortion_model: str = "perspective"
     distortion_k1: float = 0.0
     distortion_k2: float = 0.0

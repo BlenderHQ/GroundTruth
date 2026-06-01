@@ -125,6 +125,7 @@ class GROUNDTRUTH_OT_export_xmp_range(Operator):
                 prior=str(props.prior),
                 rotation_mode=str(props.rotation_mode),
                 distortion_model=str(props.distortion_model),
+                projection_model=str(getattr(props, "projection_model", "auto")),
                 k1=float(getattr(props, "distortion_k1", 0.0)),
                 k2=float(getattr(props, "distortion_k2", 0.0)),
                 k3=float(getattr(props, "distortion_k3", 0.0)),

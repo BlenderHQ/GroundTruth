@@ -163,6 +163,47 @@ class RcXmpPoseTests(unittest.TestCase):
         for length in _row_lengths(rot9):
             self.assertAlmostEqual(1.0, float(length), places=6)
 
+    def test_equirectangular_projection_can_be_forced_for_pano_camera(self) -> None:
+        cam = self._camera("CamPano")
+        cam.data.type = "PANO"
+        cam.location = (-4.0, -6.0, 2.0)
+
+        with tempfile.TemporaryDirectory(prefix="groundtruth_pano_xmp_test_") as tmp_dir:
+            xmp_path = pathlib.Path(tmp_dir) / "0001.xmp"
+            write_xmp_for_camera_at_frame(
+                scene=self.scene,
+                depsgraph=None,
+                cam_obj=cam,
+                frame=1,
+                xmp_path=str(xmp_path),
+                prior="exact",
+                rotation_mode=self.rotation_mode,
+                distortion_model="perspective",
+                projection_model="equirectangular",
+                set_frame=True,
+            )
+
+            text = xmp_path.read_text(encoding="utf-8")
+
+        self.assertIn('xcr:ProjectionModel="equirectangular"', text)
+        self.assertIn('xcr:ProjectionConvention="lonlat"', text)
+        self.assertIn('xcr:HorizontalFovDeg="360"', text)
+        self.assertIn('xcr:VerticalFovDeg="180"', text)
+        self.assertNotIn("xcr:FocalLength35mm", text)
+        self.assertNotIn("xcr:DistortionModel", text)
+
+        focal_35, _pos3, _rot9, fx, fy, cx, cy = camera_stats_at_frame(
+            scene=self.scene,
+            depsgraph=None,
+            cam_obj=cam,
+            frame=1,
+            rotation_mode=self.rotation_mode,
+            projection_model="equirectangular",
+            set_frame=True,
+        )
+        self.assertEqual(0.0, focal_35)
+        self.assertEqual((0.0, 0.0, 0.0, 0.0), (fx, fy, cx, cy))
+
 
 if __name__ == "__main__":
     unittest.main()

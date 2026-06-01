@@ -97,6 +97,17 @@ class GroundTruthSceneProperties(PropertyGroup):
         default="rc_rcw",
     )
 
+    projection_model: EnumProperty(
+        name="Projection",
+        description="XMP camera projection. Auto uses the Blender camera type; Panoramic writes equirectangular lon/lat XMP",
+        items=[
+            ("auto", "Auto", "Perspective for perspective cameras; equirectangular for equirectangular panoramic cameras"),
+            ("perspective", "Perspective", "Force perspective XMP with focal length and optional distortion"),
+            ("equirectangular", "Panoramic", "Force equirectangular panoramic XMP with lon/lat projection"),
+        ],
+        default="auto",
+    )
+
     distortion_model: EnumProperty(
         name="Distortion",
         description="Perspective exports zero distortion. Brown exports coefficients and auto-selects RC brown3/brown4/brown3t2/brown4t2",

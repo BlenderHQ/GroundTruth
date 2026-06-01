@@ -222,6 +222,7 @@ def _start_job(context: bpy.types.Context, *, mode: str, frame_start: int, frame
     JOB.image_pattern = str(props.image_pattern)
     JOB.prior = str(props.prior)
     JOB.rotation_mode = str(props.rotation_mode)
+    JOB.projection_model = str(getattr(props, "projection_model", "auto"))
     JOB.distortion_model = str(props.distortion_model)
     JOB.distortion_k1 = float(getattr(props, "distortion_k1", 0.0))
     JOB.distortion_k2 = float(getattr(props, "distortion_k2", 0.0))
@@ -301,6 +302,7 @@ def _internal_start_render(context: bpy.types.Context, *, is_animation: bool) ->
     JOB.image_pattern = str(props.image_pattern)
     JOB.prior = str(props.prior)
     JOB.rotation_mode = str(props.rotation_mode)
+    JOB.projection_model = str(getattr(props, "projection_model", "auto"))
     JOB.distortion_model = str(props.distortion_model)
     JOB.distortion_k1 = float(getattr(props, "distortion_k1", 0.0))
     JOB.distortion_k2 = float(getattr(props, "distortion_k2", 0.0))
@@ -387,6 +389,7 @@ def _finalize_available_frames(context: bpy.types.Context, *, out_base: str) -> 
                     prior=str(JOB.prior),
                     rotation_mode=str(JOB.rotation_mode),
                     distortion_model=str(JOB.distortion_model),
+                    projection_model=str(JOB.projection_model),
                     k1=float(JOB.distortion_k1),
                     k2=float(JOB.distortion_k2),
                     k3=float(JOB.distortion_k3),
@@ -405,7 +408,13 @@ def _finalize_available_frames(context: bpy.types.Context, *, out_base: str) -> 
         try:
             # Stats table (last finalized frame).
             focal_35, pos3, rot9, fx, fy, cx, cy = camera_stats_at_frame(
-                scene=scene, depsgraph=depsgraph, cam_obj=cam, frame=frame, rotation_mode=str(JOB.rotation_mode), set_frame=False
+                scene=scene,
+                depsgraph=depsgraph,
+                cam_obj=cam,
+                frame=frame,
+                rotation_mode=str(JOB.rotation_mode),
+                projection_model=str(JOB.projection_model),
+                set_frame=False,
             )
             JOB.last_focal_35mm = float(focal_35)
             JOB.last_fx_px = float(fx)
@@ -463,6 +472,7 @@ def _final_pass_write_missing_xmps(context: bpy.types.Context, *, out_base: str)
                     prior=str(JOB.prior),
                     rotation_mode=str(JOB.rotation_mode),
                     distortion_model=str(JOB.distortion_model),
+                    projection_model=str(JOB.projection_model),
                     k1=float(JOB.distortion_k1),
                     k2=float(JOB.distortion_k2),
                     k3=float(JOB.distortion_k3),

@@ -66,8 +66,21 @@ def _camera_pano_type(cam_data: bpy.types.Camera) -> str:
     return str(pano_type or "")
 
 
-def camera_projection_kind(cam_data: bpy.types.Camera) -> str:
+def camera_projection_kind(cam_data: bpy.types.Camera, projection_model: str = "auto") -> str:
+    requested = str(projection_model or "auto").lower()
     cam_type = str(getattr(cam_data, "type", ""))
+    if requested == "equirectangular":
+        return "equirectangular"
+    if requested == "perspective":
+        if cam_type == "PERSP":
+            return "perspective"
+        raise RuntimeError(
+            "XMP Projection is set to Perspective, but the selected camera is not perspective "
+            f"(camera.type={cam_type!r})"
+        )
+    if requested not in {"auto", ""}:
+        raise RuntimeError(f"Unknown XMP projection model: {projection_model!r}")
+
     if cam_type == "PERSP":
         return "perspective"
     if cam_type == "PANO":
@@ -297,6 +310,7 @@ def write_xmp_for_camera_at_frame(
     prior: str,
     rotation_mode: str,
     distortion_model: str,
+    projection_model: str = "auto",
     k1: float = 0.0,
     k2: float = 0.0,
     k3: float = 0.0,
@@ -373,7 +387,7 @@ def write_xmp_for_camera_at_frame(
     rot9 = mat3_to_row_major9(R)
     pos3 = (float(C.x), float(C.y), float(C.z))
 
-    projection_kind = camera_projection_kind(cam_eval.data)
+    projection_kind = camera_projection_kind(cam_eval.data, projection_model=projection_model)
     if projection_kind == "equirectangular":
         horizontal_fov_deg, vertical_fov_deg = equirectangular_fov_degrees(cam_eval.data)
         pano_cfg = RcEquirectangularXmpConfig(
@@ -411,6 +425,7 @@ def camera_stats_at_frame(
     cam_obj: bpy.types.Object,
     frame: int,
     rotation_mode: str,
+    projection_model: str = "auto",
     set_frame: bool = True,
 ) -> Tuple[float, Tuple[float, float, float], Tuple[float, ...], float, float, float, float]:
     if set_frame:
@@ -438,7 +453,7 @@ def camera_stats_at_frame(
     else:
         cam_eval = cam_obj
 
-    projection_kind = camera_projection_kind(cam_eval.data)
+    projection_kind = camera_projection_kind(cam_eval.data, projection_model=projection_model)
     if projection_kind == "equirectangular":
         focal_35 = 0.0
         fx = fy = cx = cy = 0.0

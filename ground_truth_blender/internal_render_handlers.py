@@ -109,6 +109,7 @@ def _finalize_missing_xmps(scene: bpy.types.Scene, *, cam: bpy.types.Object, is_
                     prior=str(JOB.prior),
                     rotation_mode=str(JOB.rotation_mode),
                     distortion_model=str(JOB.distortion_model),
+                    projection_model=str(JOB.projection_model),
                     k1=float(JOB.distortion_k1),
                     k2=float(JOB.distortion_k2),
                     k3=float(JOB.distortion_k3),
@@ -182,6 +183,7 @@ def on_render_write(scene: bpy.types.Scene, depsgraph: bpy.types.Depsgraph) -> N
                 prior=str(JOB.prior),
                 rotation_mode=str(JOB.rotation_mode),
                 distortion_model=str(JOB.distortion_model),
+                projection_model=str(JOB.projection_model),
                 k1=float(JOB.distortion_k1),
                 k2=float(JOB.distortion_k2),
                 k3=float(JOB.distortion_k3),
@@ -193,7 +195,13 @@ def on_render_write(scene: bpy.types.Scene, depsgraph: bpy.types.Depsgraph) -> N
             JOB.wrote_xmp += 1
 
         focal_35, pos3, rot9, fx, fy, cx, cy = camera_stats_at_frame(
-            scene=scene, depsgraph=depsgraph, cam_obj=cam, frame=frame, rotation_mode=str(JOB.rotation_mode), set_frame=False
+            scene=scene,
+            depsgraph=depsgraph,
+            cam_obj=cam,
+            frame=frame,
+            rotation_mode=str(JOB.rotation_mode),
+            projection_model=str(JOB.projection_model),
+            set_frame=False,
         )
 
         JOB.last_frame_done = frame
