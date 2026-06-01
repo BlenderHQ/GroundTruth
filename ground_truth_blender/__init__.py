@@ -10,7 +10,7 @@
 bl_info = {
     "name": "GroundTruth",
     "author": "Erium Vladlen",
-    "version": (0, 6, 1),
+    "version": (0, 6, 5),
     "blender": (5, 0, 0),
     "location": "View3D > Sidebar > GroundTruth",
     "description": "Export RC/RealityScan XMP camera priors (optionally while rendering)",

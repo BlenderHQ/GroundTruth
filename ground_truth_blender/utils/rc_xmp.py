@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 import re
 from dataclasses import dataclass
@@ -39,6 +40,86 @@ class RcXmpConfig:
     distortion_group: int = -1
     in_texturing: int = 1
     in_meshing: int = 1
+
+
+@dataclass(frozen=True)
+class RcEquirectangularXmpConfig:
+    version: int = 4
+    calibration_prior: str = "exact"
+    pose_prior: str = "exact"
+    coordinates: str = "absolute"
+    projection_model: str = "equirectangular"
+    projection_prior: str = "exact"
+    projection_convention: str = "lonlat"
+    horizontal_fov_deg: float = 360.0
+    vertical_fov_deg: float = 180.0
+    calibration_group: int = -1
+    in_texturing: int = 1
+    in_meshing: int = 1
+
+
+def _camera_pano_type(cam_data: bpy.types.Camera) -> str:
+    pano_type = getattr(cam_data, "panorama_type", None)
+    if pano_type is None:
+        cycles = getattr(cam_data, "cycles", None)
+        pano_type = getattr(cycles, "panorama_type", None) if cycles is not None else None
+    return str(pano_type or "")
+
+
+def camera_projection_kind(cam_data: bpy.types.Camera) -> str:
+    cam_type = str(getattr(cam_data, "type", ""))
+    if cam_type == "PERSP":
+        return "perspective"
+    if cam_type == "PANO":
+        pano_type = _camera_pano_type(cam_data)
+        if not pano_type or pano_type.upper() == "EQUIRECTANGULAR":
+            return "equirectangular"
+        raise RuntimeError(
+            "Only perspective and equirectangular panoramic cameras are supported "
+            f"(camera.type='PANO', panorama_type={pano_type!r})"
+        )
+    raise RuntimeError(
+        "Only perspective and equirectangular panoramic cameras are supported "
+        f"(camera.type={cam_type!r})"
+    )
+
+
+def _pano_angle_attr(cam_data: bpy.types.Camera, name: str) -> float | None:
+    value = getattr(cam_data, name, None)
+    if value is None:
+        cycles = getattr(cam_data, "cycles", None)
+        value = getattr(cycles, name, None) if cycles is not None else None
+    if value is None:
+        return None
+    return float(value)
+
+
+def _snap_fov_deg(value: float, target: float) -> float:
+    if abs(float(value) - float(target)) < 1.0e-3:
+        return float(target)
+    return float(value)
+
+
+def equirectangular_fov_degrees(cam_data: bpy.types.Camera) -> Tuple[float, float]:
+    lon_min = _pano_angle_attr(cam_data, "longitude_min")
+    lon_max = _pano_angle_attr(cam_data, "longitude_max")
+    lat_min = _pano_angle_attr(cam_data, "latitude_min")
+    lat_max = _pano_angle_attr(cam_data, "latitude_max")
+
+    horizontal = 360.0
+    vertical = 180.0
+    if lon_min is not None and lon_max is not None:
+        horizontal = abs(math.degrees(float(lon_max) - float(lon_min)))
+        if horizontal <= 0.0:
+            horizontal = 360.0
+    if lat_min is not None and lat_max is not None:
+        vertical = abs(math.degrees(float(lat_max) - float(lat_min)))
+        if vertical <= 0.0:
+            vertical = 180.0
+
+    horizontal = _snap_fov_deg(horizontal, 360.0)
+    vertical = _snap_fov_deg(vertical, 180.0)
+    return (horizontal, vertical)
 
 
 def sensor_fit_effective(scene: bpy.types.Scene, cam_data: bpy.types.Camera) -> str:
@@ -177,6 +258,35 @@ def xmp_text(
     )
 
 
+def equirectangular_xmp_text(
+    *,
+    cfg: RcEquirectangularXmpConfig,
+    rotation_row_major9: Iterable[float],
+    position_xyz: Iterable[float],
+) -> str:
+    rot_s = " ".join(format_f64(v) for v in rotation_row_major9)
+    pos_s = " ".join(format_f64(v) for v in position_xyz)
+
+    return (
+        "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n"
+        "  <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n"
+        "    <rdf:Description xmlns:xcr=\"http://www.capturingreality.com/ns/xcr/1.1#\""
+        f" xcr:Version=\"{cfg.version}\"\n"
+        f"       xcr:PosePrior=\"{cfg.pose_prior}\" xcr:Coordinates=\"{cfg.coordinates}\"\n"
+        f"       xcr:ProjectionModel=\"{cfg.projection_model}\" xcr:ProjectionPrior=\"{cfg.projection_prior}\"\n"
+        f"       xcr:ProjectionConvention=\"{cfg.projection_convention}\""
+        f" xcr:HorizontalFovDeg=\"{format_f64(cfg.horizontal_fov_deg)}\""
+        f" xcr:VerticalFovDeg=\"{format_f64(cfg.vertical_fov_deg)}\"\n"
+        f"       xcr:CalibrationPrior=\"{cfg.calibration_prior}\" xcr:CalibrationGroup=\"{cfg.calibration_group}\"\n"
+        f"       xcr:InTexturing=\"{cfg.in_texturing}\" xcr:InMeshing=\"{cfg.in_meshing}\">\n"
+        f"      <xcr:Rotation>{rot_s}</xcr:Rotation>\n"
+        f"      <xcr:Position>{pos_s}</xcr:Position>\n"
+        "    </rdf:Description>\n"
+        "  </rdf:RDF>\n"
+        "</x:xmpmeta>\n"
+    )
+
+
 def write_xmp_for_camera_at_frame(
     *,
     scene: bpy.types.Scene,
@@ -256,7 +366,6 @@ def write_xmp_for_camera_at_frame(
                 cam_eval = cam_obj
     else:
         cam_eval = cam_obj
-    focal_35 = focal_length_35mm(scene, cam_eval.data)
 
     mw = cam_eval.matrix_world.copy()
     C = mw.to_translation()
@@ -264,7 +373,30 @@ def write_xmp_for_camera_at_frame(
     rot9 = mat3_to_row_major9(R)
     pos3 = (float(C.x), float(C.y), float(C.z))
 
-    txt = xmp_text(cfg=cfg, focal_length_35mm_value=focal_35, rotation_row_major9=rot9, position_xyz=pos3)
+    projection_kind = camera_projection_kind(cam_eval.data)
+    if projection_kind == "equirectangular":
+        horizontal_fov_deg, vertical_fov_deg = equirectangular_fov_degrees(cam_eval.data)
+        pano_cfg = RcEquirectangularXmpConfig(
+            calibration_prior=prior,
+            pose_prior=prior,
+            projection_prior=prior,
+            horizontal_fov_deg=horizontal_fov_deg,
+            vertical_fov_deg=vertical_fov_deg,
+        )
+        txt = equirectangular_xmp_text(
+            cfg=pano_cfg,
+            rotation_row_major9=rot9,
+            position_xyz=pos3,
+        )
+    else:
+        focal_35 = focal_length_35mm(scene, cam_eval.data)
+        txt = xmp_text(
+            cfg=cfg,
+            focal_length_35mm_value=focal_35,
+            rotation_row_major9=rot9,
+            position_xyz=pos3,
+        )
+
     out_dir = os.path.dirname(xmp_path)
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
@@ -306,8 +438,13 @@ def camera_stats_at_frame(
     else:
         cam_eval = cam_obj
 
-    focal_35 = focal_length_35mm(scene, cam_eval.data)
-    fx, fy, cx, cy = intrinsics_px(scene, cam_eval.data)
+    projection_kind = camera_projection_kind(cam_eval.data)
+    if projection_kind == "equirectangular":
+        focal_35 = 0.0
+        fx = fy = cx = cy = 0.0
+    else:
+        focal_35 = focal_length_35mm(scene, cam_eval.data)
+        fx, fy, cx, cy = intrinsics_px(scene, cam_eval.data)
 
     mw = cam_eval.matrix_world.copy()
     C = mw.to_translation()
