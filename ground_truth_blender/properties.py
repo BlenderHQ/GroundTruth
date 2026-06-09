@@ -129,6 +129,35 @@ class GroundTruthSceneProperties(PropertyGroup):
         default="VISIBLE",
     )
 
+    xmp_import_behavior: EnumProperty(
+        name="Import",
+        description="How Multi-Camera XMP import handles files that match existing cameras",
+        items=[
+            ("UPDATE_OR_CREATE", "Update/Create", "Update matching cameras and create missing cameras"),
+            ("ALWAYS_CREATE", "Always Create", "Create a new camera for every imported XMP file"),
+        ],
+        default="UPDATE_OR_CREATE",
+    )
+
+    xmp_name_match_flags: EnumProperty(
+        name="Name Matching",
+        description="How imported XMP filenames are matched to existing cameras",
+        items=[
+            ("IGNORE_LETTER_CASE", "Ignore Case", "Compare names without letter case"),
+            ("IGNORE_EXTENSION", "Ignore Extension", "Compare names without filename extensions"),
+            ("USE_OBJECT_NAME", "Object Name", "Match against camera object names"),
+            ("USE_CAMERA_NAME", "Camera Data Name", "Match against camera data-block names"),
+        ],
+        options={"ENUM_FLAG"},
+        default={"IGNORE_LETTER_CASE", "IGNORE_EXTENSION", "USE_OBJECT_NAME", "USE_CAMERA_NAME"},
+    )
+
+    xmp_preserve_imported_metadata: BoolProperty(
+        name="Preserve Imported XMP",
+        description="Reuse imported XMP intrinsics, distortion, groups, and double-precision pose when the camera still matches the imported pose",
+        default=True,
+    )
+
     distortion_model: EnumProperty(
         name="Distortion",
         description="Perspective exports zero distortion. Brown exports coefficients and auto-selects RC brown3/brown4/brown3t2/brown4t2",

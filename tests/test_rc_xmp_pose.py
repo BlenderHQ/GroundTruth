@@ -3,18 +3,25 @@ from __future__ import annotations
 import math
 import pathlib
 import re
+import sys
 import tempfile
 import unittest
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 import bpy
 from mathutils import Euler, Matrix
 
+from ground_truth_blender import operators, properties
 from ground_truth_blender.utils.rc_xmp import (
     RcXmpCameraData,
     apply_xmp_camera_data_to_camera,
     camera_data_to_xmp_data,
     camera_matrix_world_from_xmp_pose,
     camera_stats_at_frame,
+    has_stored_xmp_metadata,
     read_xmp_camera_data,
     write_xmp_camera_data,
     write_xmp_for_camera_at_frame,
@@ -286,6 +293,143 @@ class RcXmpPoseTests(unittest.TestCase):
         self.assertSequenceAlmostEqual(data.distortion_coefficients, parsed.distortion_coefficients, places=12)
         self.assertSequenceAlmostEqual(data.position_xyz, parsed.position_xyz)
         self.assertSequenceAlmostEqual(data.rotation_row_major9, parsed.rotation_row_major9)
+
+
+class GroundTruthXmpOperatorTests(unittest.TestCase):
+    rotation_mode = "rc_rcw"
+    _properties_registered = False
+    _operators_registered = False
+    _scene_pointer_registered = False
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        try:
+            properties.register()
+            cls._properties_registered = True
+        except ValueError:
+            cls._properties_registered = False
+
+        if not hasattr(bpy.types.Scene, "groundtruth_props"):
+            bpy.types.Scene.groundtruth_props = bpy.props.PointerProperty(type=properties.GroundTruthSceneProperties)
+            cls._scene_pointer_registered = True
+
+        try:
+            operators.register()
+            cls._operators_registered = True
+        except ValueError:
+            cls._operators_registered = False
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        if cls._operators_registered:
+            operators.unregister()
+        if cls._scene_pointer_registered and hasattr(bpy.types.Scene, "groundtruth_props"):
+            del bpy.types.Scene.groundtruth_props
+        if cls._properties_registered:
+            properties.unregister()
+
+    def setUp(self) -> None:
+        bpy.ops.wm.read_factory_settings(use_empty=True)
+        self.scene = bpy.context.scene
+        props = self.scene.groundtruth_props
+        props.output_format = "XMP"
+        props.xmp_camera_mode = "MULTI_CAMERA"
+        props.rotation_mode = self.rotation_mode
+        props.use_scene_render_output = False
+
+    def _camera(self, name: str) -> bpy.types.Object:
+        cam_data = bpy.data.cameras.new(f"{name}Data")
+        cam_obj = bpy.data.objects.new(name, cam_data)
+        self.scene.collection.objects.link(cam_obj)
+        return cam_obj
+
+    def _sample_xmp_data(self, name: str) -> RcXmpCameraData:
+        return RcXmpCameraData(
+            name=name,
+            position_xyz=(2.0, -3.0, 4.0),
+            rotation_row_major9=(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
+            focal_length_35mm=42.25,
+            principal_u=0.125,
+            principal_v=-0.25,
+            distortion_model="brown3",
+            distortion_coefficients=(0.01, -0.02, 0.003, 0.0, 0.0, 0.0),
+            calibration_group=3,
+            distortion_group=4,
+        )
+
+    def _camera_count(self) -> int:
+        return sum(1 for obj in self.scene.objects if obj.type == "CAMERA")
+
+    def test_import_xmp_cameras_updates_existing_camera_by_name_flags(self) -> None:
+        existing = self._camera("samplecam")
+        with tempfile.TemporaryDirectory(prefix="groundtruth_import_op_test_") as tmp_dir:
+            xmp_path = pathlib.Path(tmp_dir) / "SampleCam.xmp"
+            write_xmp_camera_data(data=self._sample_xmp_data("SampleCam"), xmp_path=str(xmp_path))
+
+            result = bpy.ops.groundtruth.import_xmp_cameras(
+                "EXEC_DEFAULT",
+                directory=str(pathlib.Path(tmp_dir)) + "/",
+                files=[{"name": xmp_path.name}],
+            )
+
+        self.assertEqual({"FINISHED"}, result)
+        self.assertEqual(1, self._camera_count())
+        self.assertTrue(has_stored_xmp_metadata(existing))
+        self.assertAlmostEqual(42.25, float(existing.data["groundtruth_xmp_focal_length35mm"]), places=12)
+        self.assertAlmostEqual(2.0, float(existing.location.x), places=6)
+
+    def test_import_xmp_cameras_can_always_create_new_camera(self) -> None:
+        self._camera("DuplicateCam")
+        self.scene.groundtruth_props.xmp_import_behavior = "ALWAYS_CREATE"
+        with tempfile.TemporaryDirectory(prefix="groundtruth_import_create_op_test_") as tmp_dir:
+            xmp_path = pathlib.Path(tmp_dir) / "DuplicateCam.xmp"
+            write_xmp_camera_data(data=self._sample_xmp_data("DuplicateCam"), xmp_path=str(xmp_path))
+
+            result = bpy.ops.groundtruth.import_xmp_cameras(
+                "EXEC_DEFAULT",
+                directory=str(pathlib.Path(tmp_dir)) + "/",
+                files=[{"name": xmp_path.name}],
+            )
+
+        self.assertEqual({"FINISHED"}, result)
+        self.assertEqual(2, self._camera_count())
+
+    def test_export_xmp_cameras_uses_selected_source_and_preserved_metadata(self) -> None:
+        cam_a = self._camera("CamA")
+        cam_b = self._camera("CamB")
+        apply_xmp_camera_data_to_camera(cam_obj=cam_b, data=self._sample_xmp_data("CamB"), rotation_mode=self.rotation_mode)
+        cam_a.select_set(False)
+        cam_b.select_set(True)
+        bpy.context.view_layer.objects.active = cam_b
+
+        props = self.scene.groundtruth_props
+        props.xmp_multi_camera_source = "SELECTED"
+        with tempfile.TemporaryDirectory(prefix="groundtruth_export_op_test_") as tmp_dir:
+            props.out_dir = tmp_dir
+            result = bpy.ops.groundtruth.export_xmp_cameras("EXEC_DEFAULT")
+            out_a = pathlib.Path(tmp_dir) / "CamA.xmp"
+            out_b = pathlib.Path(tmp_dir) / "CamB.xmp"
+            out_a_exists = out_a.exists()
+            out_b_exists = out_b.exists()
+            parsed = read_xmp_camera_data(str(out_b))
+
+        self.assertEqual({"FINISHED"}, result)
+        self.assertFalse(out_a_exists)
+        self.assertTrue(out_b_exists)
+        self.assertAlmostEqual(42.25, parsed.focal_length_35mm, places=12)
+        self.assertAlmostEqual(0.125, parsed.principal_u, places=12)
+        self.assertEqual("brown3", parsed.distortion_model)
+
+    def test_clear_xmp_metadata_operator_clears_selected_cameras(self) -> None:
+        cam = self._camera("ClearCam")
+        apply_xmp_camera_data_to_camera(cam_obj=cam, data=self._sample_xmp_data("ClearCam"), rotation_mode=self.rotation_mode)
+        cam.select_set(True)
+        bpy.context.view_layer.objects.active = cam
+
+        result = bpy.ops.groundtruth.clear_xmp_metadata("EXEC_DEFAULT")
+
+        self.assertEqual({"FINISHED"}, result)
+        self.assertFalse(has_stored_xmp_metadata(cam))
 
 
 if __name__ == "__main__":

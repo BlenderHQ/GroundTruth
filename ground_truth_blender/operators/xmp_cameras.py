@@ -19,6 +19,7 @@ from bpy.types import Operator, OperatorFileListElement
 from ..utils.rc_xmp import (
     apply_xmp_camera_data_to_camera,
     camera_data_to_xmp_data,
+    clear_stored_xmp_metadata,
     read_xmp_camera_data,
     write_xmp_camera_data,
 )
@@ -32,10 +33,30 @@ def _camera_name_from_path(path: str) -> str:
     return name or "Camera"
 
 
-def _find_camera_by_name(scene: bpy.types.Scene, name: str) -> bpy.types.Object | None:
-    target = str(name).lower()
+def _normalize_name(name: str, flags: set[str]) -> str:
+    value = str(name)
+    if "IGNORE_EXTENSION" in flags:
+        value = os.path.splitext(value)[0]
+    if "IGNORE_LETTER_CASE" in flags:
+        value = value.lower()
+    return value
+
+
+def _find_camera_by_name(scene: bpy.types.Scene, name: str, flags: set[str]) -> bpy.types.Object | None:
+    target = _normalize_name(name, flags)
+    use_object_name = "USE_OBJECT_NAME" in flags
+    use_camera_name = "USE_CAMERA_NAME" in flags
+    if not use_object_name and not use_camera_name:
+        use_object_name = use_camera_name = True
     for obj in scene.objects:
-        if obj.type == "CAMERA" and (obj.name.lower() == target or obj.data.name.lower() == target):
+        if obj.type != "CAMERA":
+            continue
+        names = []
+        if use_object_name:
+            names.append(obj.name)
+        if use_camera_name:
+            names.append(obj.data.name)
+        if any(_normalize_name(item, flags) == target for item in names):
             return obj
     return None
 
@@ -116,11 +137,13 @@ class GROUNDTRUTH_OT_import_xmp_cameras(Operator):
         imported = 0
         created = 0
         first_obj = None
+        match_flags = set(props.xmp_name_match_flags)
+        update_existing = str(props.xmp_import_behavior) == "UPDATE_OR_CREATE"
         for path in sorted(paths):
             try:
                 data = read_xmp_camera_data(path)
                 name = data.name or _camera_name_from_path(path)
-                cam_obj = _find_camera_by_name(context.scene, name)
+                cam_obj = _find_camera_by_name(context.scene, name, match_flags) if update_existing else None
                 if cam_obj is None:
                     cam_obj = _new_camera(context, name)
                     created += 1
@@ -186,7 +209,7 @@ class GROUNDTRUTH_OT_export_xmp_cameras(Operator):
                     t1=float(props.distortion_t1),
                     t2=float(props.distortion_t2),
                     set_frame=True,
-                    use_stored_xmp=True,
+                    use_stored_xmp=bool(props.xmp_preserve_imported_metadata),
                 )
                 xmp_path = _safe_xmp_path(out_dir, cam_obj.name, used_names)
                 write_xmp_camera_data(data=data, xmp_path=xmp_path)
@@ -199,4 +222,29 @@ class GROUNDTRUTH_OT_export_xmp_cameras(Operator):
             return {"CANCELLED"}
 
         self.report({"INFO"}, f"Exported {exported} XMP camera(s) to {out_dir}")
+        return {"FINISHED"}
+
+
+class GROUNDTRUTH_OT_clear_xmp_metadata(Operator):
+    bl_idname = "groundtruth.clear_xmp_metadata"
+    bl_label = "Clear Imported XMP Metadata"
+    bl_description = "Clear stored imported XMP metadata from selected cameras"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        cameras = [obj for obj in context.selected_objects if obj.type == "CAMERA"]
+        if not cameras:
+            active = context.view_layer.objects.active
+            if active is not None and active.type == "CAMERA":
+                cameras = [active]
+            elif context.scene.camera is not None and context.scene.camera.type == "CAMERA":
+                cameras = [context.scene.camera]
+
+        if not cameras:
+            self.report({"ERROR"}, "No camera selected")
+            return {"CANCELLED"}
+
+        for cam_obj in cameras:
+            clear_stored_xmp_metadata(cam_obj)
+        self.report({"INFO"}, f"Cleared imported XMP metadata from {len(cameras)} camera(s)")
         return {"FINISHED"}

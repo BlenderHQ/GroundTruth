@@ -11,6 +11,7 @@ import bpy
 from bpy.types import Panel
 
 from ..runtime import JOB
+from ..utils.rc_xmp import has_stored_xmp_metadata, xmp_metadata_summary_lines
 
 
 class GROUNDTRUTH_PT_main(Panel):
@@ -122,9 +123,22 @@ class GROUNDTRUTH_PT_main(Panel):
             box_col.prop(props, "xmp_camera_mode", expand=True)
             if props.xmp_camera_mode == "MULTI_CAMERA":
                 box_col.prop(props, "xmp_multi_camera_source")
+                box_col.prop(props, "xmp_import_behavior")
+                box_col.prop(props, "xmp_name_match_flags")
+                box_col.prop(props, "xmp_preserve_imported_metadata")
             box_col.prop(props, "projection_model")
             box_col.prop(props, "prior")
             box_col.prop(props, "rotation_mode")
+
+            active_cam = context.view_layer.objects.active
+            if active_cam is None or active_cam.type != "CAMERA":
+                active_cam = props.camera_obj or context.scene.camera
+            if has_stored_xmp_metadata(active_cam):
+                box_col.separator()
+                box_col.label(text=f"Stored XMP: {active_cam.name}", icon="INFO")
+                for line in xmp_metadata_summary_lines(active_cam):
+                    box_col.label(text=line, icon="BLANK1")
+                box_col.operator("groundtruth.clear_xmp_metadata", icon="TRASH", text="Clear Stored XMP")
 
         col.separator()
 

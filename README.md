@@ -13,6 +13,7 @@ Imports and exports **RealityCapture/RealityScan-style XMP camera priors** (`xcr
 - `Export XMP (Range)` writes XMPs without rendering.
 - `Import XMP Cameras` creates or updates scene cameras from selected XMP files.
 - `Export XMP Cameras` writes one XMP per visible, selected, or all scene cameras.
+- Imported XMP intrinsics, distortion, groups, and double-precision pose values are stored on the camera for safer round trips.
 - `Export Metashape XML (Range)` writes a single `*.xml` without rendering.
 - Principal point is exported as **zero** (`xcr:PrincipalPointU/V = 0`).
 - Distortion model:
@@ -39,6 +40,8 @@ Key options:
 
 - `Camera`: defaults to the scene active camera.
 - `Camera Mode`: use `Animation` for one camera over frames, or `Multi-Camera` for one camera per XMP.
+- `Name Matching`: controls whether Multi-Camera import updates existing cameras by object name, camera data name, case, and extension.
+- `Preserve Imported XMP`: reuses imported XMP metadata during export while the camera pose still matches the imported pose.
 - `Use Scene Render Output`: names XMP sidecars next to Blender’s render output (`scene.render.filepath` / `frame_path`).
 - `Use Scene Frame Range`: uses `scene.frame_start/end/step` for animation operations.
 - `Write Metashape XML`: after render, also writes `Metashape XML` into the output directory.
@@ -52,6 +55,8 @@ XMP is written as a sidecar next to the rendered image:
 For still renders, Blender may write directly to `scene.render.filepath`; the add-on writes the matching `.xmp` next to that file.
 
 In Multi-Camera mode, camera XMP files are written to `Output Dir` and named from the camera object names.
+
+Use `Clear Stored XMP` on a selected camera if you want export to ignore imported metadata and use the current Blender camera settings instead.
 
 ## Cancel behavior
 

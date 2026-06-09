@@ -108,6 +108,33 @@ _GT_XMP_DISTORTION_GROUP = "groundtruth_xmp_distortion_group"
 _GT_XMP_IN_TEXTURING = "groundtruth_xmp_in_texturing"
 _GT_XMP_IN_MESHING = "groundtruth_xmp_in_meshing"
 
+_GT_XMP_OBJECT_KEYS = (
+    _GT_XMP_POSITION,
+    _GT_XMP_ROTATION,
+    _GT_XMP_ROTATION_MODE,
+)
+
+_GT_XMP_CAMERA_KEYS = (
+    _GT_XMP_FOCAL,
+    _GT_XMP_SKEW,
+    _GT_XMP_ASPECT,
+    _GT_XMP_PRINCIPAL,
+    _GT_XMP_DISTORTION_MODEL,
+    _GT_XMP_DISTORTION_COEFFS,
+    _GT_XMP_PROJECTION_MODEL,
+    _GT_XMP_PROJECTION_PRIOR,
+    _GT_XMP_PROJECTION_CONVENTION,
+    _GT_XMP_HORIZONTAL_FOV,
+    _GT_XMP_VERTICAL_FOV,
+    _GT_XMP_POSE_PRIOR,
+    _GT_XMP_CALIBRATION_PRIOR,
+    _GT_XMP_COORDINATES,
+    _GT_XMP_CALIBRATION_GROUP,
+    _GT_XMP_DISTORTION_GROUP,
+    _GT_XMP_IN_TEXTURING,
+    _GT_XMP_IN_MESHING,
+)
+
 
 def _camera_pano_type(cam_data: bpy.types.Camera) -> str:
     pano_type = getattr(cam_data, "panorama_type", None)
@@ -452,6 +479,58 @@ def store_xmp_camera_data(cam_obj: bpy.types.Object, data: RcXmpCameraData, *, r
     cam_data[_GT_XMP_IN_MESHING] = int(data.in_meshing)
 
 
+def has_stored_xmp_metadata(cam_obj: bpy.types.Object | None) -> bool:
+    if cam_obj is None or getattr(cam_obj, "type", "") != "CAMERA":
+        return False
+    for key in _GT_XMP_OBJECT_KEYS:
+        if key in cam_obj:
+            return True
+    cam_data = cam_obj.data
+    for key in _GT_XMP_CAMERA_KEYS:
+        if key in cam_data:
+            return True
+    return False
+
+
+def clear_stored_xmp_metadata(cam_obj: bpy.types.Object) -> None:
+    if cam_obj.type != "CAMERA":
+        return
+    for key in _GT_XMP_OBJECT_KEYS:
+        if key in cam_obj:
+            del cam_obj[key]
+    cam_data = cam_obj.data
+    for key in _GT_XMP_CAMERA_KEYS:
+        if key in cam_data:
+            del cam_data[key]
+
+
+def xmp_metadata_summary_lines(cam_obj: bpy.types.Object | None) -> list[str]:
+    if cam_obj is None or getattr(cam_obj, "type", "") != "CAMERA":
+        return []
+    cam_data = cam_obj.data
+    lines: list[str] = []
+    projection = cam_data.get(_GT_XMP_PROJECTION_MODEL)
+    if projection is not None:
+        lines.append(f"Projection: {projection}")
+    focal = cam_data.get(_GT_XMP_FOCAL)
+    if focal is not None:
+        lines.append(f"Focal35: {format_f64(float(focal))}")
+    principal = _stored_float_tuple(cam_data, _GT_XMP_PRINCIPAL, 2)
+    if principal is not None:
+        lines.append(f"Principal: {format_f64(principal[0])}, {format_f64(principal[1])}")
+    distortion_model = cam_data.get(_GT_XMP_DISTORTION_MODEL)
+    if distortion_model is not None:
+        lines.append(f"Distortion: {distortion_model}")
+    coeffs = _stored_float_tuple(cam_data, _GT_XMP_DISTORTION_COEFFS, 6)
+    if coeffs is not None:
+        lines.append("Coeffs: " + " ".join(format_f64(v) for v in coeffs))
+    calibration_group = cam_data.get(_GT_XMP_CALIBRATION_GROUP)
+    distortion_group = cam_data.get(_GT_XMP_DISTORTION_GROUP)
+    if calibration_group is not None or distortion_group is not None:
+        lines.append(f"Groups: cal={calibration_group if calibration_group is not None else '-'} dist={distortion_group if distortion_group is not None else '-'}")
+    return lines
+
+
 def apply_xmp_camera_data_to_camera(
     *,
     cam_obj: bpy.types.Object,
@@ -570,44 +649,76 @@ def camera_data_to_xmp_data(
         pos3, rot9 = stored_pose
 
     cam_data = cam_obj.data
-    stored_focal = cam_data.get(_GT_XMP_FOCAL)
-    if stored_focal is not None and abs(float(stored_focal) - float(focal_35)) <= 1.0e-5:
-        focal_35 = float(stored_focal)
+    if use_stored_xmp:
+        stored_focal = cam_data.get(_GT_XMP_FOCAL)
+        if stored_focal is not None and abs(float(stored_focal) - float(focal_35)) <= 1.0e-5:
+            focal_35 = float(stored_focal)
 
     projection_kind = camera_projection_kind(cam_data, projection_model=projection_model)
-    if cam_data.get(_GT_XMP_PROJECTION_MODEL) == "equirectangular":
+    if use_stored_xmp and cam_data.get(_GT_XMP_PROJECTION_MODEL) == "equirectangular":
         projection_kind = "equirectangular"
 
-    stored_coeffs = _stored_float_tuple(cam_data, _GT_XMP_DISTORTION_COEFFS, 6)
-    if stored_coeffs is not None:
-        k1, k2, k3, k4, t1, t2 = stored_coeffs
-        distortion_model = str(cam_data.get(_GT_XMP_DISTORTION_MODEL, distortion_model))
+    if use_stored_xmp:
+        stored_coeffs = _stored_float_tuple(cam_data, _GT_XMP_DISTORTION_COEFFS, 6)
+        if stored_coeffs is not None:
+            k1, k2, k3, k4, t1, t2 = stored_coeffs
+            distortion_model = str(cam_data.get(_GT_XMP_DISTORTION_MODEL, distortion_model))
+        principal = _stored_float_tuple(cam_data, _GT_XMP_PRINCIPAL, 2) or (0.0, 0.0)
+        pose_prior = str(cam_data.get(_GT_XMP_POSE_PRIOR, prior))
+        calibration_prior = str(cam_data.get(_GT_XMP_CALIBRATION_PRIOR, prior))
+        coordinates = str(cam_data.get(_GT_XMP_COORDINATES, "absolute"))
+        projection_model_out = str(cam_data.get(_GT_XMP_PROJECTION_MODEL, projection_kind))
+        projection_prior = str(cam_data.get(_GT_XMP_PROJECTION_PRIOR, prior))
+        projection_convention = str(cam_data.get(_GT_XMP_PROJECTION_CONVENTION, "lonlat"))
+        horizontal_fov_deg = float(cam_data.get(_GT_XMP_HORIZONTAL_FOV, 360.0))
+        vertical_fov_deg = float(cam_data.get(_GT_XMP_VERTICAL_FOV, 180.0))
+        skew = float(cam_data.get(_GT_XMP_SKEW, 0.0))
+        aspect_ratio = float(cam_data.get(_GT_XMP_ASPECT, 1.0))
+        calibration_group = int(cam_data.get(_GT_XMP_CALIBRATION_GROUP, -1))
+        distortion_group = int(cam_data.get(_GT_XMP_DISTORTION_GROUP, -1))
+        in_texturing = int(cam_data.get(_GT_XMP_IN_TEXTURING, 1))
+        in_meshing = int(cam_data.get(_GT_XMP_IN_MESHING, 1))
+    else:
+        principal = (0.0, 0.0)
+        pose_prior = str(prior)
+        calibration_prior = str(prior)
+        coordinates = "absolute"
+        projection_model_out = str(projection_kind)
+        projection_prior = str(prior)
+        projection_convention = "lonlat"
+        horizontal_fov_deg = 360.0
+        vertical_fov_deg = 180.0
+        skew = 0.0
+        aspect_ratio = 1.0
+        calibration_group = -1
+        distortion_group = -1
+        in_texturing = 1
+        in_meshing = 1
 
-    principal = _stored_float_tuple(cam_data, _GT_XMP_PRINCIPAL, 2) or (0.0, 0.0)
     return RcXmpCameraData(
         name=str(cam_obj.name),
         version=4 if str(projection_kind) == "equirectangular" else 3,
         position_xyz=pos3,
         rotation_row_major9=rot9,
-        pose_prior=str(cam_data.get(_GT_XMP_POSE_PRIOR, prior)),
-        calibration_prior=str(cam_data.get(_GT_XMP_CALIBRATION_PRIOR, prior)),
-        coordinates=str(cam_data.get(_GT_XMP_COORDINATES, "absolute")),
-        projection_model=str(cam_data.get(_GT_XMP_PROJECTION_MODEL, projection_kind)),
-        projection_prior=str(cam_data.get(_GT_XMP_PROJECTION_PRIOR, prior)),
-        projection_convention=str(cam_data.get(_GT_XMP_PROJECTION_CONVENTION, "lonlat")),
-        horizontal_fov_deg=float(cam_data.get(_GT_XMP_HORIZONTAL_FOV, 360.0)),
-        vertical_fov_deg=float(cam_data.get(_GT_XMP_VERTICAL_FOV, 180.0)),
+        pose_prior=pose_prior,
+        calibration_prior=calibration_prior,
+        coordinates=coordinates,
+        projection_model=projection_model_out,
+        projection_prior=projection_prior,
+        projection_convention=projection_convention,
+        horizontal_fov_deg=horizontal_fov_deg,
+        vertical_fov_deg=vertical_fov_deg,
         focal_length_35mm=float(focal_35),
-        skew=float(cam_data.get(_GT_XMP_SKEW, 0.0)),
-        aspect_ratio=float(cam_data.get(_GT_XMP_ASPECT, 1.0)),
+        skew=skew,
+        aspect_ratio=aspect_ratio,
         principal_u=float(principal[0]),
         principal_v=float(principal[1]),
         distortion_model=str(distortion_model),
         distortion_coefficients=(float(k1), float(k2), float(k3), float(k4), float(t1), float(t2)),
-        calibration_group=int(cam_data.get(_GT_XMP_CALIBRATION_GROUP, -1)),
-        distortion_group=int(cam_data.get(_GT_XMP_DISTORTION_GROUP, -1)),
-        in_texturing=int(cam_data.get(_GT_XMP_IN_TEXTURING, 1)),
-        in_meshing=int(cam_data.get(_GT_XMP_IN_MESHING, 1)),
+        calibration_group=calibration_group,
+        distortion_group=distortion_group,
+        in_texturing=in_texturing,
+        in_meshing=in_meshing,
     )
 
 
