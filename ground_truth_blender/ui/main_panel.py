@@ -100,11 +100,14 @@ class GROUNDTRUTH_PT_main(Panel):
         box_col.prop(props, "use_scene_render_output")
         box_col.prop(props, "use_scene_frame_range")
         naming_col = box_col.column(align=True)
-        naming_col.enabled = not bool(props.use_scene_render_output)
+        naming_col.enabled = not bool(props.use_scene_render_output) or props.xmp_camera_mode == "MULTI_CAMERA"
         naming_col.prop(props, "out_dir")
-        naming_col.prop(props, "image_pattern")
-        if bool(props.use_scene_render_output):
+        if props.xmp_camera_mode != "MULTI_CAMERA":
+            naming_col.prop(props, "image_pattern")
+        if bool(props.use_scene_render_output) and props.xmp_camera_mode != "MULTI_CAMERA":
             box_col.label(text="Naming uses scene Render Output", icon="INFO")
+        if props.xmp_camera_mode == "MULTI_CAMERA":
+            box_col.label(text="Multi-Camera XMP uses Output Dir", icon="INFO")
         if str(props.output_format) == "METASHAPE":
             box_col.separator()
             box_col.prop(props, "metashape_xml_filename")
@@ -116,6 +119,9 @@ class GROUNDTRUTH_PT_main(Panel):
             box = col.box()
             box_col = box.column(align=True)
             box_col.label(text="XMP Params:")
+            box_col.prop(props, "xmp_camera_mode", expand=True)
+            if props.xmp_camera_mode == "MULTI_CAMERA":
+                box_col.prop(props, "xmp_multi_camera_source")
             box_col.prop(props, "projection_model")
             box_col.prop(props, "prior")
             box_col.prop(props, "rotation_mode")
@@ -138,8 +144,14 @@ class GROUNDTRUTH_PT_main(Panel):
 
         # Actions
         if str(props.output_format) == "XMP":
-            row = col.row(align=True)
-            row.operator("groundtruth.export_xmp_range", icon="EXPORT", text="Export XMP (Range)")
+            if props.xmp_camera_mode == "MULTI_CAMERA":
+                row = col.row(align=True)
+                row.operator("groundtruth.import_xmp_cameras", icon="IMPORT", text="Import XMP Cameras")
+                row = col.row(align=True)
+                row.operator("groundtruth.export_xmp_cameras", icon="EXPORT", text="Export XMP Cameras")
+            else:
+                row = col.row(align=True)
+                row.operator("groundtruth.export_xmp_range", icon="EXPORT", text="Export XMP (Range)")
         else:
             row = col.row(align=True)
             row.operator("groundtruth.export_metashape_xml_range", icon="EXPORT", text="Export Metashape XML (Range)")
@@ -148,11 +160,11 @@ class GROUNDTRUTH_PT_main(Panel):
 
         if str(props.output_format) == "XMP":
             row = col.row(align=True)
-            row.enabled = not JOB.active
+            row.enabled = not JOB.active and props.xmp_camera_mode != "MULTI_CAMERA"
             row.operator("groundtruth.render_frame_and_xmp", icon="RENDER_STILL", text="Render Frame + XMP")
 
             row = col.row(align=True)
-            row.enabled = not JOB.active
+            row.enabled = not JOB.active and props.xmp_camera_mode != "MULTI_CAMERA"
             row.operator("groundtruth.render_animation_and_xmp", icon="RENDER_ANIMATION", text="Render Animation + XMP")
         else:
             row = col.row(align=True)

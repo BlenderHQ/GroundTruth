@@ -9,7 +9,16 @@ import unittest
 import bpy
 from mathutils import Euler, Matrix
 
-from ground_truth_blender.utils.rc_xmp import camera_stats_at_frame, write_xmp_for_camera_at_frame
+from ground_truth_blender.utils.rc_xmp import (
+    RcXmpCameraData,
+    apply_xmp_camera_data_to_camera,
+    camera_data_to_xmp_data,
+    camera_matrix_world_from_xmp_pose,
+    camera_stats_at_frame,
+    read_xmp_camera_data,
+    write_xmp_camera_data,
+    write_xmp_for_camera_at_frame,
+)
 
 
 def _flatten_row_major3(m: Matrix) -> tuple[float, ...]:
@@ -203,6 +212,80 @@ class RcXmpPoseTests(unittest.TestCase):
         )
         self.assertEqual(0.0, focal_35)
         self.assertEqual((0.0, 0.0, 0.0, 0.0), (fx, fy, cx, cy))
+
+    def test_xmp_pose_inverse_matches_export_rotation_modes(self) -> None:
+        cam = self._camera("CamInverse")
+        cam.location = (12.5, -7.25, 3.125)
+        cam.rotation_euler = Euler((0.33, -0.44, 0.55), "XYZ")
+        self.scene.frame_set(1)
+        mw = cam.matrix_world.copy()
+        expected_pos = tuple(float(v) for v in mw.to_translation())
+
+        for rotation_mode in ("rc_rcw", "rc_rwc", "blender_rcw", "blender_rwc"):
+            rot9 = _independent_rotation(mw, rotation_mode)
+            imported_mw = camera_matrix_world_from_xmp_pose(
+                position_xyz=expected_pos,
+                rotation_row_major9=rot9,
+                rotation_mode=rotation_mode,
+            )
+            self.assertSequenceAlmostEqual(expected_pos, tuple(float(v) for v in imported_mw.to_translation()))
+            self.assertSequenceAlmostEqual(
+                _flatten_row_major3(mw.to_3x3()),
+                _flatten_row_major3(imported_mw.to_3x3()),
+            )
+
+    def test_imported_xmp_metadata_is_preserved_for_camera_export(self) -> None:
+        cam = self._camera("ImportedXmpCam")
+        data = RcXmpCameraData(
+            name=cam.name,
+            position_xyz=(1.25, -2.5, 3.75),
+            rotation_row_major9=(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
+            focal_length_35mm=35.12345678901235,
+            skew=0.012345678901,
+            aspect_ratio=1.000123456789,
+            principal_u=0.123456789012,
+            principal_v=-0.234567890123,
+            distortion_model="brown4t2",
+            distortion_coefficients=(0.1, -0.02, 0.003, -0.0004, 0.00005, -0.000006),
+            calibration_group=7,
+            distortion_group=9,
+            in_texturing=0,
+            in_meshing=1,
+        )
+        apply_xmp_camera_data_to_camera(cam_obj=cam, data=data, rotation_mode=self.rotation_mode)
+
+        exported = camera_data_to_xmp_data(
+            scene=self.scene,
+            depsgraph=None,
+            cam_obj=cam,
+            frame=1,
+            prior="exact",
+            rotation_mode=self.rotation_mode,
+            distortion_model="perspective",
+            set_frame=True,
+            use_stored_xmp=True,
+        )
+
+        self.assertAlmostEqual(data.focal_length_35mm, exported.focal_length_35mm, places=12)
+        self.assertAlmostEqual(data.principal_u, exported.principal_u, places=12)
+        self.assertAlmostEqual(data.principal_v, exported.principal_v, places=12)
+        self.assertEqual(data.distortion_model, exported.distortion_model)
+        self.assertSequenceAlmostEqual(data.distortion_coefficients, exported.distortion_coefficients, places=12)
+        self.assertEqual(data.calibration_group, exported.calibration_group)
+        self.assertEqual(data.distortion_group, exported.distortion_group)
+
+        with tempfile.TemporaryDirectory(prefix="groundtruth_xmp_roundtrip_test_") as tmp_dir:
+            xmp_path = pathlib.Path(tmp_dir) / "ImportedXmpCam.xmp"
+            write_xmp_camera_data(data=exported, xmp_path=str(xmp_path))
+            parsed = read_xmp_camera_data(str(xmp_path))
+
+        self.assertAlmostEqual(data.focal_length_35mm, parsed.focal_length_35mm, places=12)
+        self.assertAlmostEqual(data.principal_u, parsed.principal_u, places=12)
+        self.assertAlmostEqual(data.principal_v, parsed.principal_v, places=12)
+        self.assertEqual(data.distortion_model, parsed.distortion_model)
+        self.assertSequenceAlmostEqual(data.distortion_coefficients, parsed.distortion_coefficients, places=12)
+        self.assertSequenceAlmostEqual(data.position_xyz, parsed.position_xyz)
+        self.assertSequenceAlmostEqual(data.rotation_row_major9, parsed.rotation_row_major9)
 
 
 if __name__ == "__main__":

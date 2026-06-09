@@ -1,15 +1,18 @@
 # GroundTruth (Blender Add-on)
 
-Exports **RealityCapture/RealityScan-style XMP camera priors** (`xcr:` namespace) from a Blender camera animation, optionally **while rendering**.
+Imports and exports **RealityCapture/RealityScan-style XMP camera priors** (`xcr:` namespace), either from a Blender camera animation or as one XMP per scene camera.
 
 ## Features
 
 - Export one `.xmp` per frame (RC-style `<xcr:Rotation>`, `<xcr:Position>`, intrinsics).
+- Import or export one `.xmp` per camera in **Multi-Camera** mode.
 - Export a single **Metashape/Agisoft XML** (one camera per frame) matching the same animation.
 - `Render Frame + XMP` and `Render Animation + XMP`:
   - **Internal** backend uses Blender’s normal render UI/preview.
   - **External** backend runs a background Blender render (reliable cancel).
 - `Export XMP (Range)` writes XMPs without rendering.
+- `Import XMP Cameras` creates or updates scene cameras from selected XMP files.
+- `Export XMP Cameras` writes one XMP per visible, selected, or all scene cameras.
 - `Export Metashape XML (Range)` writes a single `*.xml` without rendering.
 - Principal point is exported as **zero** (`xcr:PrincipalPointU/V = 0`).
 - Distortion model:
@@ -35,6 +38,7 @@ Open a `.blend` with an animated camera and use:
 Key options:
 
 - `Camera`: defaults to the scene active camera.
+- `Camera Mode`: use `Animation` for one camera over frames, or `Multi-Camera` for one camera per XMP.
 - `Use Scene Render Output`: names XMP sidecars next to Blender’s render output (`scene.render.filepath` / `frame_path`).
 - `Use Scene Frame Range`: uses `scene.frame_start/end/step` for animation operations.
 - `Write Metashape XML`: after render, also writes `Metashape XML` into the output directory.
@@ -46,6 +50,8 @@ XMP is written as a sidecar next to the rendered image:
 - `.../frame_0001.png` → `.../frame_0001.xmp`
 
 For still renders, Blender may write directly to `scene.render.filepath`; the add-on writes the matching `.xmp` next to that file.
+
+In Multi-Camera mode, camera XMP files are written to `Output Dir` and named from the camera object names.
 
 ## Cancel behavior
 

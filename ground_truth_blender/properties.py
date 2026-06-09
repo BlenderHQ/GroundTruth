@@ -108,6 +108,27 @@ class GroundTruthSceneProperties(PropertyGroup):
         default="auto",
     )
 
+    xmp_camera_mode: EnumProperty(
+        name="Camera Mode",
+        description="XMP import/export source: one animated camera or many scene cameras",
+        items=[
+            ("ANIMATION", "Animation", "Export one selected camera over a frame range"),
+            ("MULTI_CAMERA", "Multi-Camera", "Import or export one XMP per camera"),
+        ],
+        default="ANIMATION",
+    )
+
+    xmp_multi_camera_source: EnumProperty(
+        name="Cameras",
+        description="Which scene cameras to export in Multi-Camera mode",
+        items=[
+            ("VISIBLE", "Visible", "Export visible camera objects"),
+            ("SELECTED", "Selected", "Export selected camera objects"),
+            ("ALL", "All", "Export all scene camera objects"),
+        ],
+        default="VISIBLE",
+    )
+
     distortion_model: EnumProperty(
         name="Distortion",
         description="Perspective exports zero distortion. Brown exports coefficients and auto-selects RC brown3/brown4/brown3t2/brown4t2",

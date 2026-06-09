@@ -17,10 +17,13 @@ from .render_and_xmp import (
     GROUNDTRUTH_OT_render_animation_and_xmp,
     GROUNDTRUTH_OT_render_frame_and_xmp,
 )
+from .xmp_cameras import GROUNDTRUTH_OT_export_xmp_cameras, GROUNDTRUTH_OT_import_xmp_cameras
 
 
 classes = (
     GROUNDTRUTH_OT_export_xmp_range,
+    GROUNDTRUTH_OT_import_xmp_cameras,
+    GROUNDTRUTH_OT_export_xmp_cameras,
     GROUNDTRUTH_OT_export_metashape_xml_range,
     GROUNDTRUTH_OT_render_frame_and_xmp,
     GROUNDTRUTH_OT_render_animation_and_xmp,
