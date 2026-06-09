@@ -6,6 +6,7 @@ import re
 import sys
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -15,6 +16,7 @@ import bpy
 from mathutils import Euler, Matrix
 
 from ground_truth_blender import operators, properties
+from ground_truth_blender.utils.agisoft_xml import write_metashape_xml_for_frames
 from ground_truth_blender.utils.rc_xmp import (
     RcXmpCameraData,
     apply_xmp_camera_data_to_camera,
@@ -294,6 +296,49 @@ class RcXmpPoseTests(unittest.TestCase):
         self.assertSequenceAlmostEqual(data.position_xyz, parsed.position_xyz)
         self.assertSequenceAlmostEqual(data.rotation_row_major9, parsed.rotation_row_major9)
 
+    def test_metashape_xml_writer_includes_native_import_fields(self) -> None:
+        cam = self._camera("MetashapeCam")
+        cam.data.lens = 28.0
+        cam.data.sensor_fit = "HORIZONTAL"
+        cam.data.sensor_width = 36.0
+        cam.location = (1.0, 2.0, 3.0)
+        cam.rotation_euler = Euler((0.1, 0.2, 0.3), "XYZ")
+
+        with tempfile.TemporaryDirectory(prefix="groundtruth_metashape_xml_test_") as tmp_dir:
+            xml_path = pathlib.Path(tmp_dir) / "metashape.xml"
+            write_metashape_xml_for_frames(
+                scene=self.scene,
+                cam_obj=cam,
+                frames=[1, 2],
+                image_label_for_frame=lambda frame: f"frame_{frame:04d}.png",
+                out_xml_path=str(xml_path),
+                rotation_mode="rc_rwc",
+                distortion_mode="perspective",
+                k1=0.0,
+                k2=0.0,
+                k3=0.0,
+                k4=0.0,
+                t1=0.0,
+                t2=0.0,
+            )
+            root = ET.parse(xml_path).getroot()
+
+        self.assertEqual("2.0.0", root.attrib.get("version"))
+        sensor = root.find("./chunk/sensors/sensor")
+        self.assertIsNotNone(sensor)
+        sensor_props = {item.attrib.get("name"): item.attrib.get("value") for item in sensor.findall("property")}
+        self.assertIn("pixel_width", sensor_props)
+        self.assertIn("pixel_height", sensor_props)
+        self.assertIsNotNone(root.find("./chunk/components/component/transform/rotation"))
+        self.assertIsNotNone(root.find("./chunk/components/component/transform/translation"))
+
+        cameras = root.findall("./chunk/cameras/camera")
+        self.assertEqual(2, len(cameras))
+        self.assertEqual("0", cameras[0].attrib.get("sensor_id"))
+        self.assertEqual("frame_0001.png", cameras[0].attrib.get("label"))
+        transform_values = cameras[0].findtext("transform", "").split()
+        self.assertEqual(16, len(transform_values))
+
 
 class GroundTruthXmpOperatorTests(unittest.TestCase):
     rotation_mode = "rc_rcw"
@@ -430,6 +475,34 @@ class GroundTruthXmpOperatorTests(unittest.TestCase):
 
         self.assertEqual({"FINISHED"}, result)
         self.assertFalse(has_stored_xmp_metadata(cam))
+
+    def test_export_metashape_xml_cameras_uses_selected_source(self) -> None:
+        cam_a = self._camera("CamA")
+        cam_b = self._camera("CamB")
+        cam_b.location = (4.0, 5.0, 6.0)
+        cam_a.select_set(False)
+        cam_b.select_set(True)
+        bpy.context.view_layer.objects.active = cam_b
+
+        props = self.scene.groundtruth_props
+        props.output_format = "METASHAPE"
+        props.xmp_camera_mode = "MULTI_CAMERA"
+        props.xmp_multi_camera_source = "SELECTED"
+        with tempfile.TemporaryDirectory(prefix="groundtruth_export_metashape_op_test_") as tmp_dir:
+            props.out_dir = tmp_dir
+            props.metashape_xml_filename = "selected.xml"
+            result = bpy.ops.groundtruth.export_metashape_xml_cameras("EXEC_DEFAULT")
+            root = ET.parse(pathlib.Path(tmp_dir) / "selected.xml").getroot()
+
+        self.assertEqual({"FINISHED"}, result)
+        self.assertEqual("2.0.0", root.attrib.get("version"))
+        cameras = root.findall("./chunk/cameras/camera")
+        self.assertEqual(1, len(cameras))
+        self.assertEqual("CamB", cameras[0].attrib.get("label"))
+        self.assertEqual("0", cameras[0].attrib.get("sensor_id"))
+        self.assertEqual(16, len(cameras[0].findtext("transform", "").split()))
+        self.assertIsNotNone(root.find("./chunk/sensors/sensor/property[@name='pixel_width']"))
+        self.assertIsNotNone(root.find("./chunk/components/component/transform/rotation"))
 
 
 if __name__ == "__main__":

@@ -108,7 +108,7 @@ class GROUNDTRUTH_PT_main(Panel):
         if bool(props.use_scene_render_output) and props.xmp_camera_mode != "MULTI_CAMERA":
             box_col.label(text="Naming uses scene Render Output", icon="INFO")
         if props.xmp_camera_mode == "MULTI_CAMERA":
-            box_col.label(text="Multi-Camera XMP uses Output Dir", icon="INFO")
+            box_col.label(text="Multi-Camera export uses Output Dir", icon="INFO")
         if str(props.output_format) == "METASHAPE":
             box_col.separator()
             box_col.prop(props, "metashape_xml_filename")
@@ -139,6 +139,13 @@ class GROUNDTRUTH_PT_main(Panel):
                 for line in xmp_metadata_summary_lines(active_cam):
                     box_col.label(text=line, icon="BLANK1")
                 box_col.operator("groundtruth.clear_xmp_metadata", icon="TRASH", text="Clear Stored XMP")
+        else:
+            box = col.box()
+            box_col = box.column(align=True)
+            box_col.label(text="Metashape Params:")
+            box_col.prop(props, "xmp_camera_mode", expand=True)
+            if props.xmp_camera_mode == "MULTI_CAMERA":
+                box_col.prop(props, "xmp_multi_camera_source")
 
         col.separator()
 
@@ -167,8 +174,12 @@ class GROUNDTRUTH_PT_main(Panel):
                 row = col.row(align=True)
                 row.operator("groundtruth.export_xmp_range", icon="EXPORT", text="Export XMP (Range)")
         else:
-            row = col.row(align=True)
-            row.operator("groundtruth.export_metashape_xml_range", icon="EXPORT", text="Export Metashape XML (Range)")
+            if props.xmp_camera_mode == "MULTI_CAMERA":
+                row = col.row(align=True)
+                row.operator("groundtruth.export_metashape_xml_cameras", icon="EXPORT", text="Export Metashape XML Cameras")
+            else:
+                row = col.row(align=True)
+                row.operator("groundtruth.export_metashape_xml_range", icon="EXPORT", text="Export Metashape XML (Range)")
 
         col.separator()
 
@@ -182,7 +193,7 @@ class GROUNDTRUTH_PT_main(Panel):
             row.operator("groundtruth.render_animation_and_xmp", icon="RENDER_ANIMATION", text="Render Animation + XMP")
         else:
             row = col.row(align=True)
-            row.enabled = not JOB.active
+            row.enabled = not JOB.active and props.xmp_camera_mode != "MULTI_CAMERA"
             row.operator("groundtruth.render_animation_and_metashape", icon="RENDER_ANIMATION", text="Render Animation + XML")
 
         row = col.row(align=True)

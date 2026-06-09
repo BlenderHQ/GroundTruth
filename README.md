@@ -6,7 +6,7 @@ Imports and exports **RealityCapture/RealityScan-style XMP camera priors** (`xcr
 
 - Export one `.xmp` per frame (RC-style `<xcr:Rotation>`, `<xcr:Position>`, intrinsics).
 - Import or export one `.xmp` per camera in **Multi-Camera** mode.
-- Export a single **Metashape/Agisoft XML** (one camera per frame) matching the same animation.
+- Export a single **Metashape/Agisoft XML** from an animation range or from many scene cameras.
 - `Render Frame + XMP` and `Render Animation + XMP`:
   - **Internal** backend uses Blender’s normal render UI/preview.
   - **External** backend runs a background Blender render (reliable cancel).
@@ -14,7 +14,8 @@ Imports and exports **RealityCapture/RealityScan-style XMP camera priors** (`xcr
 - `Import XMP Cameras` creates or updates scene cameras from selected XMP files.
 - `Export XMP Cameras` writes one XMP per visible, selected, or all scene cameras.
 - Imported XMP intrinsics, distortion, groups, and double-precision pose values are stored on the camera for safer round trips.
-- `Export Metashape XML (Range)` writes a single `*.xml` without rendering.
+- `Export Metashape XML (Range)` writes one XML camera per animation frame without rendering.
+- `Export Metashape XML Cameras` writes one XML camera per visible, selected, or all scene cameras.
 - Principal point is exported as **zero** (`xcr:PrincipalPointU/V = 0`).
 - Distortion model:
   - `Perspective`: coefficients exported as zeros.
@@ -39,7 +40,7 @@ Open a `.blend` with an animated camera and use:
 Key options:
 
 - `Camera`: defaults to the scene active camera.
-- `Camera Mode`: use `Animation` for one camera over frames, or `Multi-Camera` for one camera per XMP.
+- `Camera Mode`: use `Animation` for one camera over frames, or `Multi-Camera` for one scene camera per XMP/XML camera.
 - `Name Matching`: controls whether Multi-Camera import updates existing cameras by object name, camera data name, case, and extension.
 - `Preserve Imported XMP`: reuses imported XMP metadata during export while the camera pose still matches the imported pose.
 - `Use Scene Render Output`: names XMP sidecars next to Blender’s render output (`scene.render.filepath` / `frame_path`).
@@ -54,7 +55,7 @@ XMP is written as a sidecar next to the rendered image:
 
 For still renders, Blender may write directly to `scene.render.filepath`; the add-on writes the matching `.xmp` next to that file.
 
-In Multi-Camera mode, camera XMP files are written to `Output Dir` and named from the camera object names.
+In Multi-Camera mode, camera XMP files are written to `Output Dir` and named from the camera object names. Metashape XML camera labels also use camera object names; rename cameras to match photo filenames when you want Metashape to attach transforms to already loaded photos.
 
 Use `Clear Stored XMP` on a selected camera if you want export to ignore imported metadata and use the current Blender camera settings instead.
 

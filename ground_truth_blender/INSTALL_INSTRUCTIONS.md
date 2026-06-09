@@ -31,6 +31,7 @@ UI location: `View3D → Sidebar → GroundTruth`.
 ## What it does
 
 - Import/export RealityCapture/RealityScan-style `xcr:` XMP sidecars per frame or per camera.
+- Export Metashape/Agisoft XML for an animation range or for visible, selected, or all scene cameras.
 - Optionally render (frame or animation) and write an XMP sidecar next to each rendered frame.
 - Render backend:
   - **Internal**: uses Blender’s render UI/preview; cancellation is the normal **Esc** in the render window.

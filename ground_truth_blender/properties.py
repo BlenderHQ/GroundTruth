@@ -18,7 +18,7 @@ class GroundTruthSceneProperties(PropertyGroup):
         description="What GroundTruth exports",
         items=[
             ("XMP", "RC/RS XMP", "Write one .xmp per frame (sidecar next to each rendered image)"),
-            ("METASHAPE", "AP/AM XML", "Write a single Metashape/Agisoft XML for the selected frame range"),
+            ("METASHAPE", "AP/AM XML", "Write a single Metashape/Agisoft XML"),
         ],
         default="XMP",
     )
@@ -110,10 +110,10 @@ class GroundTruthSceneProperties(PropertyGroup):
 
     xmp_camera_mode: EnumProperty(
         name="Camera Mode",
-        description="XMP import/export source: one animated camera or many scene cameras",
+        description="Camera export source: one animated camera over frames or many scene cameras",
         items=[
             ("ANIMATION", "Animation", "Export one selected camera over a frame range"),
-            ("MULTI_CAMERA", "Multi-Camera", "Import or export one XMP per camera"),
+            ("MULTI_CAMERA", "Multi-Camera", "Import or export one camera per scene camera"),
         ],
         default="ANIMATION",
     )

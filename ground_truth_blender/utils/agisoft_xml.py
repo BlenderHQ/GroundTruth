@@ -16,7 +16,7 @@ from typing import Callable, Iterable, Sequence
 import bpy
 from mathutils import Matrix
 
-from .rc_xmp import format_f64, intrinsics_px, rotation_from_camera
+from .rc_xmp import format_f64, intrinsics_px, rotation_from_camera, sensor_fit_effective
 
 
 @dataclass(frozen=True)
@@ -26,6 +26,8 @@ class MetashapeCalibration:
     f: float
     cx: float
     cy: float
+    pixel_width: float
+    pixel_height: float
     k1: float
     k2: float
     k3: float
@@ -37,8 +39,15 @@ class MetashapeCalibration:
 @dataclass(frozen=True)
 class MetashapeCamera:
     camera_id: int
+    sensor_id: int
     label: str
     transform_row_major16: tuple[float, ...]
+
+
+@dataclass(frozen=True)
+class MetashapeCameraItem:
+    camera: bpy.types.Object
+    label: str
 
 
 def _effective_resolution(scene: bpy.types.Scene) -> tuple[int, int]:
@@ -99,6 +108,19 @@ def _format_floats(values: Sequence[float]) -> str:
     return " ".join(format_f64(v) for v in values)
 
 
+def _metashape_focal_pixels(scene: bpy.types.Scene, cam_data: bpy.types.Camera) -> float:
+    fx, fy, _cx_px, _cy_px = intrinsics_px(scene, cam_data)
+    fit = sensor_fit_effective(scene, cam_data)
+    return float(fy if fit == "VERTICAL" else fx)
+
+
+def _metashape_pixel_size_mm(cam_data: bpy.types.Camera, f_px: float) -> float:
+    lens_mm = float(cam_data.lens)
+    if lens_mm <= 0.0 or float(f_px) <= 0.0:
+        raise RuntimeError("Invalid camera lens/focal settings")
+    return lens_mm / float(f_px)
+
+
 def _metashape_calibration_from_scene(
     *,
     scene: bpy.types.Scene,
@@ -112,7 +134,8 @@ def _metashape_calibration_from_scene(
     p2: float,
 ) -> MetashapeCalibration:
     w, h = _effective_resolution(scene)
-    fx, _fy, _cx_px, _cy_px = intrinsics_px(scene, cam_data)
+    f_px = _metashape_focal_pixels(scene, cam_data)
+    pixel_size_mm = _metashape_pixel_size_mm(cam_data, f_px)
 
     if str(distortion_mode) == "perspective":
         k1 = k2 = k3 = k4 = p1 = p2 = 0.0
@@ -122,9 +145,11 @@ def _metashape_calibration_from_scene(
     return MetashapeCalibration(
         width=w,
         height=h,
-        f=float(fx),
+        f=float(f_px),
         cx=0.0,
         cy=0.0,
+        pixel_width=float(pixel_size_mm),
+        pixel_height=float(pixel_size_mm),
         k1=float(k1),
         k2=float(k2),
         k3=float(k3),
@@ -134,73 +159,32 @@ def _metashape_calibration_from_scene(
     )
 
 
-def write_metashape_xml_for_frames(
-    *,
-    scene: bpy.types.Scene,
-    cam_obj: bpy.types.Object,
-    frames: Sequence[int],
-    image_label_for_frame: Callable[[int], str],
-    out_xml_path: str,
-    rotation_mode: str,
-    distortion_mode: str,
-    k1: float,
-    k2: float,
-    k3: float,
-    k4: float,
-    t1: float,
-    t2: float,
-) -> None:
-    import xml.etree.ElementTree as ET
-
-    if cam_obj.type != "CAMERA":
-        raise RuntimeError("cam_obj must be a CAMERA object")
-
-    if not frames:
-        raise RuntimeError("frames list is empty")
-
-    depsgraph = bpy.context.evaluated_depsgraph_get()
-    cam_eval0 = cam_obj.evaluated_get(depsgraph)
-    calib = _metashape_calibration_from_scene(
-        scene=scene,
-        cam_data=cam_eval0.data,
-        distortion_mode=distortion_mode,
-        k1=k1,
-        k2=k2,
-        k3=k3,
-        k4=k4,
-        p1=t1,
-        p2=t2,
+def _calibration_key(calib: MetashapeCalibration) -> tuple[object, ...]:
+    return (
+        int(calib.width),
+        int(calib.height),
+        format_f64(calib.f),
+        format_f64(calib.cx),
+        format_f64(calib.cy),
+        format_f64(calib.pixel_width),
+        format_f64(calib.pixel_height),
+        format_f64(calib.k1),
+        format_f64(calib.k2),
+        format_f64(calib.k3),
+        format_f64(calib.k4),
+        format_f64(calib.p1),
+        format_f64(calib.p2),
     )
 
-    cameras_out: list[MetashapeCamera] = []
-    restore_frame = int(scene.frame_current)
-    try:
-        for idx, frame in enumerate(frames):
-            scene.frame_set(int(frame))
-            depsgraph = bpy.context.evaluated_depsgraph_get()
-            cam_eval = cam_obj.evaluated_get(depsgraph)
 
-            mw = cam_eval.matrix_world.copy()
-            C = mw.to_translation()
-            Rwc = _rotation_rwc_metashape_cv(cam_matrix_world=mw)
-            T = _transform_camera_to_world_row_major16(Rwc=Rwc, C_world=(C.x, C.y, C.z))
+def _add_sensor_xml(parent, *, sensor_id: int, calib: MetashapeCalibration) -> None:
+    import xml.etree.ElementTree as ET
 
-            label = os.path.basename(str(image_label_for_frame(int(frame))))
-            cameras_out.append(MetashapeCamera(camera_id=int(idx), label=label, transform_row_major16=T))
-    finally:
-        try:
-            scene.frame_set(int(restore_frame))
-        except Exception:
-            pass
-
-    # Build document mirroring the example structure in tests/test_sfm/Motor24mmAgi.xml.
-    doc = ET.Element("document", attrib={"version": "1.2.0"})
-    chunk = ET.SubElement(doc, "chunk", attrib={"label": "Chunk 1", "enabled": "true"})
-
-    sensors = ET.SubElement(chunk, "sensors", attrib={"next_id": "1"})
-    sensor = ET.SubElement(sensors, "sensor", attrib={"id": "0", "label": "unknown", "type": "frame"})
+    sensor = ET.SubElement(parent, "sensor", attrib={"id": str(sensor_id), "label": "unknown", "type": "frame"})
     ET.SubElement(sensor, "resolution", attrib={"width": str(calib.width), "height": str(calib.height)})
     ET.SubElement(sensor, "property", attrib={"name": "layer_index", "value": "0"})
+    ET.SubElement(sensor, "property", attrib={"name": "pixel_width", "value": format_f64(calib.pixel_width)})
+    ET.SubElement(sensor, "property", attrib={"name": "pixel_height", "value": format_f64(calib.pixel_height)})
     bands = ET.SubElement(sensor, "bands")
     ET.SubElement(bands, "band", attrib={"label": "Red"})
     ET.SubElement(bands, "band", attrib={"label": "Green"})
@@ -221,9 +205,30 @@ def write_metashape_xml_for_frames(
     ET.SubElement(calib_el, "p1").text = format_f64(calib.p1)
     ET.SubElement(calib_el, "p2").text = format_f64(calib.p2)
 
-    # Components: keep it minimal (single component, single partition).
+
+def _write_metashape_document(
+    *,
+    calibrations: Sequence[MetashapeCalibration],
+    cameras_out: Sequence[MetashapeCamera],
+    out_xml_path: str,
+) -> None:
+    import xml.etree.ElementTree as ET
+
+    # Metashape's current camera XML shape is a document/chunk with sensors,
+    # components, cameras, and an identity component transform for local coords.
+    doc = ET.Element("document", attrib={"version": "2.0.0"})
+    chunk = ET.SubElement(doc, "chunk", attrib={"label": "Chunk 1", "enabled": "true"})
+
+    sensors = ET.SubElement(chunk, "sensors", attrib={"next_id": str(len(calibrations))})
+    for sensor_id, calib in enumerate(calibrations):
+        _add_sensor_xml(sensors, sensor_id=sensor_id, calib=calib)
+
     comps = ET.SubElement(chunk, "components", attrib={"next_id": "1", "active_id": "0"})
     comp0 = ET.SubElement(comps, "component", attrib={"id": "0", "label": "Component 1"})
+    comp_transform = ET.SubElement(comp0, "transform")
+    ET.SubElement(comp_transform, "rotation").text = "1 0 0 0 1 0 0 0 1"
+    ET.SubElement(comp_transform, "translation").text = "0 0 0"
+    ET.SubElement(comp_transform, "scale").text = "1"
     part_root = ET.SubElement(comp0, "partition")
     part0 = ET.SubElement(part_root, "partition")
     cam_ids = ET.SubElement(part0, "camera_ids")
@@ -236,17 +241,14 @@ def write_metashape_xml_for_frames(
             "camera",
             attrib={
                 "id": str(c.camera_id),
-                "sensor_id": "0",
+                "sensor_id": str(c.sensor_id),
                 "component_id": "0",
                 "label": str(c.label),
             },
         )
         ET.SubElement(cam_el, "transform").text = _format_floats(c.transform_row_major16)
 
-    ref = ET.SubElement(
-        chunk,
-        "reference",
-    )
+    ref = ET.SubElement(chunk, "reference")
     ref.text = 'LOCAL_CS["Local Coordinates (m)",LOCAL_DATUM["Local Datum",0],UNIT["metre",1,AUTHORITY["EPSG","9001"]]]'
 
     _indent_xml(doc)
@@ -255,3 +257,158 @@ def write_metashape_xml_for_frames(
     out_xml_path = bpy.path.abspath(out_xml_path)
     os.makedirs(os.path.dirname(out_xml_path) or ".", exist_ok=True)
     tree.write(out_xml_path, encoding="UTF-8", xml_declaration=True)
+
+
+def _camera_item_from_tuple(item: MetashapeCameraItem | tuple[bpy.types.Object, str]) -> MetashapeCameraItem:
+    if isinstance(item, MetashapeCameraItem):
+        return item
+    cam_obj, label = item
+    return MetashapeCameraItem(camera=cam_obj, label=str(label))
+
+
+def write_metashape_xml_for_cameras(
+    *,
+    scene: bpy.types.Scene,
+    camera_items: Sequence[MetashapeCameraItem | tuple[bpy.types.Object, str]],
+    out_xml_path: str,
+    rotation_mode: str,
+    distortion_mode: str,
+    k1: float,
+    k2: float,
+    k3: float,
+    k4: float,
+    t1: float,
+    t2: float,
+    frame: int | None = None,
+) -> None:
+    if not camera_items:
+        raise RuntimeError("camera_items list is empty")
+
+    restore_frame = int(scene.frame_current)
+    if frame is not None:
+        scene.frame_set(int(frame))
+
+    calibrations: list[MetashapeCalibration] = []
+    calibration_ids: dict[tuple[object, ...], int] = {}
+    cameras_out: list[MetashapeCamera] = []
+    try:
+        depsgraph = bpy.context.evaluated_depsgraph_get()
+        for idx, raw_item in enumerate(camera_items):
+            item = _camera_item_from_tuple(raw_item)
+            cam_obj = item.camera
+            if cam_obj.type != "CAMERA":
+                raise RuntimeError(f"{cam_obj.name!r} is not a CAMERA object")
+
+            cam_eval = cam_obj.evaluated_get(depsgraph)
+            calib = _metashape_calibration_from_scene(
+                scene=scene,
+                cam_data=cam_eval.data,
+                distortion_mode=distortion_mode,
+                k1=k1,
+                k2=k2,
+                k3=k3,
+                k4=k4,
+                p1=t1,
+                p2=t2,
+            )
+            calib_key = _calibration_key(calib)
+            sensor_id = calibration_ids.get(calib_key)
+            if sensor_id is None:
+                sensor_id = len(calibrations)
+                calibration_ids[calib_key] = sensor_id
+                calibrations.append(calib)
+
+            mw = cam_eval.matrix_world.copy()
+            C = mw.to_translation()
+            Rwc = _rotation_rwc_metashape_cv(cam_matrix_world=mw)
+            T = _transform_camera_to_world_row_major16(Rwc=Rwc, C_world=(C.x, C.y, C.z))
+
+            label = os.path.basename(str(item.label)) or str(cam_obj.name)
+            cameras_out.append(
+                MetashapeCamera(
+                    camera_id=int(idx),
+                    sensor_id=int(sensor_id),
+                    label=label,
+                    transform_row_major16=T,
+                )
+            )
+    finally:
+        if frame is not None:
+            try:
+                scene.frame_set(int(restore_frame))
+            except Exception:
+                pass
+
+    _write_metashape_document(calibrations=calibrations, cameras_out=cameras_out, out_xml_path=out_xml_path)
+
+
+def write_metashape_xml_for_frames(
+    *,
+    scene: bpy.types.Scene,
+    cam_obj: bpy.types.Object,
+    frames: Sequence[int],
+    image_label_for_frame: Callable[[int], str],
+    out_xml_path: str,
+    rotation_mode: str,
+    distortion_mode: str,
+    k1: float,
+    k2: float,
+    k3: float,
+    k4: float,
+    t1: float,
+    t2: float,
+) -> None:
+    if cam_obj.type != "CAMERA":
+        raise RuntimeError("cam_obj must be a CAMERA object")
+
+    if not frames:
+        raise RuntimeError("frames list is empty")
+
+    calibrations: list[MetashapeCalibration] = []
+    calibration_ids: dict[tuple[object, ...], int] = {}
+    cameras_out: list[MetashapeCamera] = []
+    restore_frame = int(scene.frame_current)
+    try:
+        for idx, frame in enumerate(frames):
+            scene.frame_set(int(frame))
+            depsgraph = bpy.context.evaluated_depsgraph_get()
+            cam_eval = cam_obj.evaluated_get(depsgraph)
+            calib = _metashape_calibration_from_scene(
+                scene=scene,
+                cam_data=cam_eval.data,
+                distortion_mode=distortion_mode,
+                k1=k1,
+                k2=k2,
+                k3=k3,
+                k4=k4,
+                p1=t1,
+                p2=t2,
+            )
+            calib_key = _calibration_key(calib)
+            sensor_id = calibration_ids.get(calib_key)
+            if sensor_id is None:
+                sensor_id = len(calibrations)
+                calibration_ids[calib_key] = sensor_id
+                calibrations.append(calib)
+
+            mw = cam_eval.matrix_world.copy()
+            C = mw.to_translation()
+            Rwc = _rotation_rwc_metashape_cv(cam_matrix_world=mw)
+            T = _transform_camera_to_world_row_major16(Rwc=Rwc, C_world=(C.x, C.y, C.z))
+
+            label = os.path.basename(str(image_label_for_frame(int(frame))))
+            cameras_out.append(
+                MetashapeCamera(
+                    camera_id=int(idx),
+                    sensor_id=int(sensor_id),
+                    label=label,
+                    transform_row_major16=T,
+                )
+            )
+    finally:
+        try:
+            scene.frame_set(int(restore_frame))
+        except Exception:
+            pass
+
+    _write_metashape_document(calibrations=calibrations, cameras_out=cameras_out, out_xml_path=out_xml_path)
