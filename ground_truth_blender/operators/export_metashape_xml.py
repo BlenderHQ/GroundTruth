@@ -14,7 +14,7 @@ import os
 import bpy
 from bpy.types import Operator
 
-from ..utils.agisoft_xml import write_metashape_xml_for_cameras, write_metashape_xml_for_frames
+from ..utils.agisoft_xml import MetashapeCameraItem, write_metashape_xml_for_cameras, write_metashape_xml_for_frames
 from ..utils.rc_xmp import format_image_name
 from .xmp_cameras import _iter_export_cameras
 
@@ -129,6 +129,54 @@ def _warn_if_camera_labels_dont_match_existing_photos(
         pass
 
 
+def _photo_path_for_label(*, out_dir_abs: str, label: str) -> str | None:
+    label = os.path.basename(str(label))
+    if not label:
+        return None
+
+    exact = os.path.join(out_dir_abs, label)
+    if os.path.isfile(exact):
+        return exact
+
+    label_stem = os.path.splitext(label)[0].lower()
+    try:
+        names = os.listdir(out_dir_abs)
+    except Exception:
+        return None
+    for name in names:
+        stem, ext = os.path.splitext(name)
+        if ext.lower() in _IMAGE_EXTS and stem.lower() == label_stem:
+            return os.path.join(out_dir_abs, name)
+    return None
+
+
+def _image_size_for_path(path: str) -> tuple[int, int] | None:
+    try:
+        img = bpy.data.images.load(path, check_existing=True)
+        width, height = img.size
+        width_i = int(width)
+        height_i = int(height)
+        if width_i > 0 and height_i > 0:
+            return (width_i, height_i)
+    except Exception:
+        return None
+    return None
+
+
+def _camera_items_with_photo_sizes(*, cameras: list[bpy.types.Object], labels: list[str], out_dir_abs: str) -> list[MetashapeCameraItem]:
+    items: list[MetashapeCameraItem] = []
+    for cam, label in zip(cameras, labels):
+        size = None
+        photo_path = _photo_path_for_label(out_dir_abs=out_dir_abs, label=label)
+        if photo_path is not None:
+            size = _image_size_for_path(photo_path)
+        if size is None:
+            items.append(MetashapeCameraItem(camera=cam, label=label))
+        else:
+            items.append(MetashapeCameraItem(camera=cam, label=label, image_width=size[0], image_height=size[1]))
+    return items
+
+
 def _metashape_xml_path(out_dir: str, name: str) -> str:
     out_name = str(name or "metashape.xml")
     if not out_name.lower().endswith(".xml"):
@@ -241,11 +289,16 @@ class GROUNDTRUTH_OT_export_metashape_xml_cameras(Operator):
 
         labels = [str(cam.name) for cam in cameras]
         _warn_if_camera_labels_dont_match_existing_photos(self, out_dir_abs=bpy.path.abspath(out_dir), labels=labels)
+        camera_items = _camera_items_with_photo_sizes(
+            cameras=cameras,
+            labels=labels,
+            out_dir_abs=bpy.path.abspath(out_dir),
+        )
 
         try:
             write_metashape_xml_for_cameras(
                 scene=context.scene,
-                camera_items=[(cam, label) for cam, label in zip(cameras, labels)],
+                camera_items=camera_items,
                 out_xml_path=out_xml,
                 rotation_mode=str(props.rotation_mode),
                 distortion_mode=str(props.distortion_model),

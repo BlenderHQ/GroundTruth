@@ -16,7 +16,7 @@ import bpy
 from mathutils import Euler, Matrix
 
 from ground_truth_blender import operators, properties
-from ground_truth_blender.utils.agisoft_xml import write_metashape_xml_for_frames
+from ground_truth_blender.utils.agisoft_xml import MetashapeCameraItem, write_metashape_xml_for_cameras, write_metashape_xml_for_frames
 from ground_truth_blender.utils.rc_xmp import (
     RcXmpCameraData,
     apply_xmp_camera_data_to_camera,
@@ -323,12 +323,13 @@ class RcXmpPoseTests(unittest.TestCase):
             )
             root = ET.parse(xml_path).getroot()
 
-        self.assertEqual("2.0.0", root.attrib.get("version"))
+        self.assertEqual("1.2.0", root.attrib.get("version"))
         sensor = root.find("./chunk/sensors/sensor")
         self.assertIsNotNone(sensor)
         sensor_props = {item.attrib.get("name"): item.attrib.get("value") for item in sensor.findall("property")}
         self.assertIn("pixel_width", sensor_props)
         self.assertIn("pixel_height", sensor_props)
+        self.assertIn("focal_length", sensor_props)
         self.assertIsNotNone(root.find("./chunk/components/component/transform/rotation"))
         self.assertIsNotNone(root.find("./chunk/components/component/transform/translation"))
 
@@ -338,6 +339,79 @@ class RcXmpPoseTests(unittest.TestCase):
         self.assertEqual("frame_0001.png", cameras[0].attrib.get("label"))
         transform_values = cameras[0].findtext("transform", "").split()
         self.assertEqual(16, len(transform_values))
+        self.assertIsNone(cameras[0].find("rotation_covariance"))
+        self.assertIsNone(cameras[0].find("location_covariance"))
+        self.assertIsNone(cameras[1].find("rotation_covariance"))
+        self.assertIsNone(cameras[1].find("location_covariance"))
+
+    def test_metashape_multi_camera_export_groups_stored_xmp_intrinsics_as_sensors(self) -> None:
+        cam_a = self._camera("CamGroupA")
+        cam_b = self._camera("CamGroupB")
+        cam_c = self._camera("CamGroupC")
+
+        shared = RcXmpCameraData(
+            name="shared",
+            position_xyz=(0.0, 0.0, 0.0),
+            rotation_row_major9=(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
+            focal_length_35mm=153.84615384615384,
+            principal_u=0.1,
+            principal_v=-0.2,
+            distortion_model="brown3t2",
+            distortion_coefficients=(0.01, -0.02, 0.003, 0.0, 0.0004, -0.0005),
+            calibration_group=10,
+            distortion_group=20,
+        )
+        second = RcXmpCameraData(
+            name="second",
+            position_xyz=(0.0, 0.0, 0.0),
+            rotation_row_major9=(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
+            focal_length_35mm=155.0,
+            principal_u=-0.05,
+            principal_v=0.03,
+            distortion_model="brown3",
+            distortion_coefficients=(-0.1, 0.2, -0.03, 0.0, 0.0, 0.0),
+            calibration_group=11,
+            distortion_group=21,
+        )
+        apply_xmp_camera_data_to_camera(cam_obj=cam_a, data=shared, rotation_mode=self.rotation_mode)
+        apply_xmp_camera_data_to_camera(cam_obj=cam_b, data=shared, rotation_mode=self.rotation_mode)
+        apply_xmp_camera_data_to_camera(cam_obj=cam_c, data=second, rotation_mode=self.rotation_mode)
+
+        with tempfile.TemporaryDirectory(prefix="groundtruth_metashape_xmp_groups_test_") as tmp_dir:
+            xml_path = pathlib.Path(tmp_dir) / "grouped.xml"
+            write_metashape_xml_for_cameras(
+                scene=self.scene,
+                camera_items=[
+                    MetashapeCameraItem(cam_a, "A.jpg", 5304, 7952),
+                    MetashapeCameraItem(cam_b, "B.jpg", 5304, 7952),
+                    MetashapeCameraItem(cam_c, "C.jpg", 5301, 7952),
+                ],
+                out_xml_path=str(xml_path),
+                rotation_mode=self.rotation_mode,
+                distortion_mode="perspective",
+                k1=0.0,
+                k2=0.0,
+                k3=0.0,
+                k4=0.0,
+                t1=0.0,
+                t2=0.0,
+                frame=1,
+            )
+            root = ET.parse(xml_path).getroot()
+
+        sensors = root.findall("./chunk/sensors/sensor")
+        cameras = root.findall("./chunk/cameras/camera")
+        self.assertEqual(2, len(sensors))
+        self.assertEqual(["0", "0", "1"], [cam.attrib.get("sensor_id") for cam in cameras])
+
+        calib0 = sensors[0].find("calibration")
+        self.assertEqual("5304", sensors[0].find("resolution").attrib.get("width"))
+        self.assertAlmostEqual(22666.666666666668, float(calib0.findtext("f")), places=6)
+        self.assertAlmostEqual(530.4, float(calib0.findtext("cx")), places=6)
+        self.assertAlmostEqual(1590.4, float(calib0.findtext("cy")), places=6)
+        self.assertAlmostEqual(0.01, float(calib0.findtext("k1")), places=12)
+        self.assertAlmostEqual(0.0004, float(calib0.findtext("p1")), places=12)
+        self.assertIsNone(sensors[0].find("property[@name='pixel_width']"))
 
 
 class GroundTruthXmpOperatorTests(unittest.TestCase):
@@ -495,12 +569,14 @@ class GroundTruthXmpOperatorTests(unittest.TestCase):
             root = ET.parse(pathlib.Path(tmp_dir) / "selected.xml").getroot()
 
         self.assertEqual({"FINISHED"}, result)
-        self.assertEqual("2.0.0", root.attrib.get("version"))
+        self.assertEqual("1.2.0", root.attrib.get("version"))
         cameras = root.findall("./chunk/cameras/camera")
         self.assertEqual(1, len(cameras))
         self.assertEqual("CamB", cameras[0].attrib.get("label"))
         self.assertEqual("0", cameras[0].attrib.get("sensor_id"))
         self.assertEqual(16, len(cameras[0].findtext("transform", "").split()))
+        self.assertIsNone(cameras[0].find("rotation_covariance"))
+        self.assertIsNone(cameras[0].find("location_covariance"))
         self.assertIsNotNone(root.find("./chunk/sensors/sensor/property[@name='pixel_width']"))
         self.assertIsNotNone(root.find("./chunk/components/component/transform/rotation"))
 
